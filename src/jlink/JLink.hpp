@@ -14,9 +14,9 @@ public:
     using Status = RTTStatus;
 
 private:
-    static void log(char const* msg) {
-        auto const s = std::string{"jlink_log: "} + msg;
-        std::fputs(s.c_str(), stderr);
+    static void log(char const*) {
+        //auto const s = std::string{"jlink_log: "} + msg;
+        //std::fputs(s.c_str(), stderr);
     }
     static void log_error(char const* msg) {
         auto const s = std::string{"jlink_log_error: "} + msg;
