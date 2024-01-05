@@ -15,11 +15,11 @@ public:
 
 private:
     static void log(char const*) {
-        //auto const s = std::string{"jlink_log: "} + msg;
+        //auto const s = std::string{"jlink_log: "} + msg + "\n";
         //std::fputs(s.c_str(), stderr);
     }
     static void log_error(char const* msg) {
-        auto const s = std::string{"jlink_log_error: "} + msg;
+        auto const s = std::string{"jlink_log_error: "} + msg + "\n";
         std::fputs(s.c_str(), stderr);
     }
 
