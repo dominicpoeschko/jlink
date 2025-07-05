@@ -24,9 +24,11 @@ private:
     static void log(char const*) {
         //        std::print(stderr, " jlink_log: {}\n", msg);
     }
+
     static void log_error(char const* msg) { std::print(stderr, " jlink_log_error: {}\n", msg); }
 
-    void connect(std::string const& device, std::uint32_t speed) {
+    void connect(std::string const& device,
+                 std::uint32_t      speed) {
         {
             char const* ret = JLINK_OpenEx(log, log_error);
             if(ret != nullptr) {
@@ -65,8 +67,8 @@ private:
             } else if(ret == 1) {
                 break;
             } else {
-                throw std::runtime_error{
-                  "JLINK_IsConnected failed: " + std::to_string(static_cast<int>(ret))};
+                throw std::runtime_error{"JLINK_IsConnected failed: "
+                                         + std::to_string(static_cast<int>(ret))};
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
@@ -109,27 +111,28 @@ private:
         execCommand("DisableInfoWinFlashDL");
         execCommand("DisableInfoWinFlashBPs");
     }
+
     void postConnectDisableDialogs() { execCommand("SetBatchMode 1"); }
 
 public:
-    JLink(
-      std::string const& device,
-      std::uint32_t      speed,
-      std::string const& ip,
-      std::uint16_t      port = 19020) {
+    JLink(std::string const& device,
+          std::uint32_t      speed,
+          std::string const& ip,
+          std::uint16_t      port = 19020) {
         {
             int const ret = JLINK_SelectIP(ip.c_str(), port);
             if(ret != 0) {
-                throw std::runtime_error{
-                  "JLINK_SelectIP(" + ip + ", " + std::to_string(static_cast<int>(port))
-                  + ") failed: " + std::to_string(ret)};
+                throw std::runtime_error{"JLINK_SelectIP(" + ip + ", "
+                                         + std::to_string(static_cast<int>(port))
+                                         + ") failed: " + std::to_string(ret)};
             }
         }
         connect(device, speed);
         checkError();
     }
 
-    explicit JLink(std::string const& device, std::uint32_t speed) {
+    explicit JLink(std::string const& device,
+                   std::uint32_t      speed) {
         {
             int const ret = JLINK_SelectUSB(0);
             if(ret != 0) {
@@ -142,7 +145,8 @@ public:
 
     ~JLink() { JLINK_Close(); }
 
-    void startRtt(std::uint32_t buffers, std::uint32_t configBlockAddress = 0) {
+    void startRtt(std::uint32_t buffers,
+                  std::uint32_t configBlockAddress = 0) {
         auto config = [](std::uint32_t address) {
             RTTStart start{};
             start.configBlockAddress = address;
@@ -174,11 +178,11 @@ public:
         }
     }
 
-    std::span<std::byte> rttRead(std::uint32_t bufferNumber, std::span<std::byte> buffer) {
-        int const ret = JLINK_RTTERMINAL_Read(
-          bufferNumber,
-          reinterpret_cast<char*>(buffer.data()),
-          static_cast<std::uint32_t>(buffer.size()));
+    std::span<std::byte> rttRead(std::uint32_t        bufferNumber,
+                                 std::span<std::byte> buffer) {
+        int const ret = JLINK_RTTERMINAL_Read(bufferNumber,
+                                              reinterpret_cast<char*>(buffer.data()),
+                                              static_cast<std::uint32_t>(buffer.size()));
         if(ret < 0) {
             throw std::runtime_error{"JLINK_RTTERMINAL_Read failed: " + std::to_string(ret)};
         }
