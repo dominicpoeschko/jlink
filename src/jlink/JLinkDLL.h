@@ -35,7 +35,7 @@ void        JLINK_Close();
 char        JLINK_SelectUSB(int port);
 char        JLINK_SelectIP(char const* host, int port);
 int         JLINK_Reset();
-int         JLINK_DownloadFile(const char* sFileName, std::uint32_t Addr);
+int         JLINK_DownloadFile(char const* sFileName, std::uint32_t Addr);
 int         JLINK_RTTERMINAL_Control(std::uint32_t command, void*);   //start 0 getStatus 4
 int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex, char* buffer, std::uint32_t bufferSize);
 }

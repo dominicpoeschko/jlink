@@ -2,9 +2,11 @@
 #include "jlink/JLinkDLL.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <print>
 #include <span>
 #include <string>
 #include <thread>
@@ -13,15 +15,16 @@ struct JLink {
 public:
     using Status = RTTStatus;
 
+    JLink(JLink const&)            = delete;
+    JLink& operator=(JLink const&) = delete;
+    JLink(JLink&&)                 = delete;
+    JLink& operator=(JLink&&)      = delete;
+
 private:
     static void log(char const*) {
-        //auto const s = std::string{"jlink_log: "} + msg + "\n";
-        //std::fputs(s.c_str(), stderr);
+        //        std::print(stderr, " jlink_log: {}\n", msg);
     }
-    static void log_error(char const* msg) {
-        auto const s = std::string{"jlink_log_error: "} + msg + "\n";
-        std::fputs(s.c_str(), stderr);
-    }
+    static void log_error(char const* msg) { std::print(stderr, " jlink_log_error: {}\n", msg); }
 
     void connect(std::string const& device, std::uint32_t speed) {
         {
@@ -53,12 +56,12 @@ private:
         //dummy to force connect
         JLINK_IsHalted();
 
-        std::size_t trys = 10;
+        std::size_t tries = 10;
 
-        while(trys != 0) {
+        while(tries != 0) {
             char const ret = JLINK_IsConnected();
             if(ret == 0) {
-                --trys;
+                --tries;
             } else if(ret == 1) {
                 break;
             } else {
@@ -67,7 +70,7 @@ private:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
-        if(trys == 0) {
+        if(tries == 0) {
             throw std::runtime_error{"JLINK_IsConnected failed: timeout"};
         }
         postConnectDisableDialogs();
@@ -80,10 +83,11 @@ private:
             int const ret
               = JLINK_ExecCommand(cmd.c_str(), error_buffer.data(), error_buffer.size());
             if(ret != 0) {
-                std::string error_msg{""};
+                std::string error_msg;
                 if(ret > 0) {
-                    error_msg = std::string_view{error_buffer.data(), error_buffer.data() + ret};
-                };
+                    error_msg
+                      = std::string_view{error_buffer.data(), std::next(error_buffer.data(), ret)};
+                }
                 throw std::runtime_error{"JLINK_ExecCommand(\"" + cmd + "\") failed: " + error_msg};
             }
         }
@@ -148,23 +152,23 @@ public:
                 throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: " + std::to_string(ret)};
             }
         };
-        auto connect = [&]() {
-            std::size_t trys{100};
+        auto connectRtt = [&]() {
+            std::size_t tries{100};
             RTTStatus   status{readStatus()};
-            while(trys != 0
+            while(tries != 0
                   && (status.isRunning == 0 || status.numUpBuffers != static_cast<int>(buffers)))
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds{10});
                 status = readStatus();
                 checkError();
-                --trys;
+                --tries;
             }
-            return trys != 0;
+            return tries != 0;
         };
         config(configBlockAddress);
-        if(!connect() && configBlockAddress != 0) {
+        if(!connectRtt() && configBlockAddress != 0) {
             config(0);
-            if(!connect()) {
+            if(!connectRtt()) {
                 throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: timeout"};
             }
         }
@@ -174,18 +178,18 @@ public:
         int const ret = JLINK_RTTERMINAL_Read(
           bufferNumber,
           reinterpret_cast<char*>(buffer.data()),
-          buffer.size());
+          static_cast<std::uint32_t>(buffer.size()));
         if(ret < 0) {
             throw std::runtime_error{"JLINK_RTTERMINAL_Read failed: " + std::to_string(ret)};
         }
-        return std::span{buffer.data(), static_cast<std::size_t>(ret)};
+        return buffer.subspan(0, static_cast<std::size_t>(ret));
     }
 
     void checkConnected() {
         checkError();
         char const ret = JLINK_IsConnected();
         if(ret == 0) {
-            throw std::runtime_error{"JLINK_Connected: " + std::to_string(static_cast<int>(ret))};
+            throw std::runtime_error{"JLINK_IsConnected: " + std::to_string(static_cast<int>(ret))};
         }
     }
 
