@@ -6,25 +6,24 @@
 extern "C" {
 
 struct RTTStart {
-    std::uint32_t                configBlockAddress;
-    std::array<std::uint32_t, 3> padding;
+    std::uint32_t                configBlockAddress{};
+    std::array<std::uint32_t, 3> padding{};
 };
 
 struct RTTStatus {
-    std::uint32_t numBytesTransferred;
-    std::uint32_t numBytesRead;
-    int           hostOverflowCount;
-    int           isRunning;
-    int           numUpBuffers;
-    int           numDownBuffers;
-    std::uint32_t overflowMask;
-    std::uint32_t padding;
+    std::uint32_t numBytesTransferred{};
+    std::uint32_t numBytesRead{};
+    int           hostOverflowCount{};
+    int           isRunning{};
+    int           numUpBuffers{};
+    int           numDownBuffers{};
+    std::uint32_t overflowMask{};
+    std::uint32_t padding{};
 };
 
-using log_callback = void(char const*);
-
-char const* JLINK_OpenEx(log_callback* log,
-                         log_callback* errorLog);
+char const* JLINK_OpenEx(void (*log)(char const*),
+                         void (*errorLog)(char const*));
+char        JLINK_IsOpen();
 int         JLINK_TIF_Select(int interface);   //JTAG 0 SWD 1
 void        JLINK_SetSpeed(std::uint32_t Speed);
 char        JLINK_IsConnected();
@@ -41,8 +40,8 @@ char        JLINK_SelectIP(char const* host,
 int         JLINK_Reset();
 int         JLINK_DownloadFile(char const*   sFileName,
                                std::uint32_t Addr);
-int         JLINK_RTTERMINAL_Control(std::uint32_t command,
-                                     void*);   //start 0 getStatus 4
+int         JLINK_RTTERMINAL_Control(std::uint32_t command,   //start 0 stop 1 getStatus 4
+                                     void*);
 int         JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
                                   char*         buffer,
                                   std::uint32_t bufferSize);

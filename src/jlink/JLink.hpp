@@ -6,10 +6,15 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <functional>
 #include <print>
 #include <span>
 #include <string>
 #include <thread>
+
+struct JLink;
+
+namespace { static JLink* JLinkInstance = nullptr; }
 
 struct JLink {
 public:
@@ -21,16 +26,42 @@ public:
     JLink& operator=(JLink&&)      = delete;
 
 private:
-    static void log(char const*) {
-        //        std::print(stderr, " jlink_log: {}\n", msg);
-    }
+    std::function<void(std::string_view)> logMsgFunction;
+    std::function<void(std::string_view)> errorMsgFunction;
 
-    static void log_error(char const* msg) { std::print(stderr, " jlink_log_error: {}\n", msg); }
+    bool rttOpen{false};
+
+    void log(char const* msg,
+             bool        isError) {
+        if(isError) {
+            if(errorMsgFunction) {
+                errorMsgFunction(std::string_view{msg});
+            }
+        } else {
+            if(logMsgFunction) {
+                logMsgFunction(std::string_view{msg});
+            }
+        }
+    }
 
     void connect(std::string const& device,
                  std::uint32_t      speed) {
+        if(JLINK_IsOpen() != 0) {
+            throw std::runtime_error{std::string{"JLINK_IsOpen: Is allready opened"}};
+        }
+
         {
-            char const* ret = JLINK_OpenEx(log, log_error);
+            char const* ret = JLINK_OpenEx(
+              [](char const* msg) {
+                  if(JLinkInstance != nullptr) {
+                      JLinkInstance->log(msg, false);
+                  }
+              },
+              [](char const* msg) {
+                  if(JLinkInstance != nullptr) {
+                      JLinkInstance->log(msg, true);
+                  }
+              });
             if(ret != nullptr) {
                 throw std::runtime_error{std::string{"JLINK_OpenEx failed: "} + ret};
             }
@@ -39,6 +70,7 @@ private:
         {
             int const ret = JLINK_TIF_Select(1);   //SWD
             if(ret != 0) {
+                JLINK_Close();
                 throw std::runtime_error{"JLINK_TIF_Select failed: " + std::to_string(ret)};
             }
         }
@@ -51,6 +83,7 @@ private:
             if(ret == 0) {
                 int const ret2 = JLINK_Connect();
                 if(ret2 != 0) {
+                    JLINK_Close();
                     throw std::runtime_error{"JLINK_Connect failed: " + std::to_string(ret2)};
                 }
             }
@@ -67,12 +100,14 @@ private:
             } else if(ret == 1) {
                 break;
             } else {
+                JLINK_Close();
                 throw std::runtime_error{"JLINK_IsConnected failed: "
                                          + std::to_string(static_cast<int>(ret))};
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
         if(tries == 0) {
+            JLINK_Close();
             throw std::runtime_error{"JLINK_IsConnected failed: timeout"};
         }
         postConnectDisableDialogs();
@@ -90,14 +125,18 @@ private:
                     error_msg
                       = std::string_view{error_buffer.data(), std::next(error_buffer.data(), ret)};
                 }
+                JLINK_Close();
                 throw std::runtime_error{"JLINK_ExecCommand(\"" + cmd + "\") failed: " + error_msg};
             }
         }
     }
 
-    void checkError() {
+    void checkError(bool doClose = true) {
         int const ret = JLINK_HasError();
         if(ret != 0) {
+            if(doClose) {
+                JLINK_Close();
+            }
             throw std::runtime_error{"JLINK_HasError: " + std::to_string(ret)};
         }
     }
@@ -114,40 +153,88 @@ private:
 
     void postConnectDisableDialogs() { execCommand("SetBatchMode 1"); }
 
+    void closeRtt() {
+        int const ret = JLINK_RTTERMINAL_Control(1, nullptr);   //stop
+
+        if(ret < 0) {
+            throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: " + std::to_string(ret)};
+        }
+        rttOpen = false;
+    }
+
+    template<typename LogF,
+             typename ErrorF,
+             typename SelectF>
+    void init(std::string const& device,
+              std::uint32_t      speed,
+              LogF&&             logFunction,
+              ErrorF&&           errorFunction,
+              SelectF&&          selectFunction) {
+        logMsgFunction = std::function<void(std::string_view)>{std::forward<LogF>(logFunction)};
+        errorMsgFunction
+          = std::function<void(std::string_view)>{std::forward<ErrorF>(errorFunction)};
+        JLinkInstance = this;
+        std::invoke(selectFunction);
+        connect(device, speed);
+        checkError();
+    }
+
 public:
+    template<typename LogF,
+             typename ErrorF>
     JLink(std::string const& device,
           std::uint32_t      speed,
           std::string const& ip,
-          std::uint16_t      port = 19020) {
-        {
-            int const ret = JLINK_SelectIP(ip.c_str(), port);
-            if(ret != 0) {
-                throw std::runtime_error{"JLINK_SelectIP(" + ip + ", "
-                                         + std::to_string(static_cast<int>(port))
-                                         + ") failed: " + std::to_string(ret)};
-            }
-        }
-        connect(device, speed);
-        checkError();
+          LogF&&             logFunction,
+          ErrorF&&           errorFunction,
+          std::uint16_t      port = 19200) {
+        init(device,
+             speed,
+             std::forward<LogF>(logFunction),
+             std::forward<ErrorF>(errorFunction),
+             [&]() {
+                 int const ret = JLINK_SelectIP(ip.c_str(), port);
+                 if(ret != 0) {
+                     throw std::runtime_error{"JLINK_SelectIP(" + ip + ", "
+                                              + std::to_string(static_cast<int>(port))
+                                              + ") failed: " + std::to_string(ret)};
+                 }
+             });
     }
 
-    explicit JLink(std::string const& device,
-                   std::uint32_t      speed) {
-        {
-            int const ret = JLINK_SelectUSB(0);
-            if(ret != 0) {
-                throw std::runtime_error{"JLINK_SelectUSB failed: " + std::to_string(ret)};
-            }
-        }
-        connect(device, speed);
-        checkError();
+    template<typename LogF,
+             typename ErrorF>
+    JLink(std::string const& device,
+          std::uint32_t      speed,
+          LogF&&             logFunction,
+          ErrorF&&           errorFunction) {
+        init(device,
+             speed,
+             std::forward<LogF>(logFunction),
+             std::forward<ErrorF>(errorFunction),
+             []() {
+                 int const ret = JLINK_SelectUSB(0);
+                 if(ret != 0) {
+                     throw std::runtime_error{"JLINK_SelectUSB failed: " + std::to_string(ret)};
+                 }
+             });
     }
 
-    ~JLink() { JLINK_Close(); }
+    ~JLink() {
+        if(rttOpen) {
+            closeRtt();
+        }
+        JLINK_Close();
+        JLinkInstance = nullptr;
+    }
 
     void startRtt(std::uint32_t buffers,
                   std::uint32_t configBlockAddress = 0) {
-        auto config = [](std::uint32_t address) {
+        auto config = [this](std::uint32_t address) {
+            if(rttOpen) {
+                closeRtt();
+            }
+
             RTTStart start{};
             start.configBlockAddress = address;
             int const ret            = JLINK_RTTERMINAL_Control(0, &start);   //start
@@ -155,6 +242,7 @@ public:
             if(ret < 0) {
                 throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: " + std::to_string(ret)};
             }
+            rttOpen = true;
         };
         auto connectRtt = [&]() {
             std::size_t tries{100};
@@ -190,7 +278,7 @@ public:
     }
 
     void checkConnected() {
-        checkError();
+        checkError(false);
         char const ret = JLINK_IsConnected();
         if(ret == 0) {
             throw std::runtime_error{"JLINK_IsConnected: " + std::to_string(static_cast<int>(ret))};
