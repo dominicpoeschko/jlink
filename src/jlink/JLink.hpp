@@ -187,7 +187,7 @@ public:
           std::string const& ip,
           LogF&&             logFunction,
           ErrorF&&           errorFunction,
-          std::uint16_t      port = 19200) {
+          std::uint16_t      port = 19020) {
         init(device,
              speed,
              std::forward<LogF>(logFunction),
