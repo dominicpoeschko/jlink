@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <compare>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
@@ -14,7 +15,10 @@
 
 struct JLink;
 
-namespace { static JLink* JLinkInstance = nullptr; }
+static JLink*& getJLinkInstance() {
+    static JLink* instance = nullptr;
+    return instance;
+}
 
 struct JLink {
 public:
@@ -53,13 +57,13 @@ private:
         {
             char const* ret = JLINK_OpenEx(
               [](char const* msg) {
-                  if(JLinkInstance != nullptr) {
-                      JLinkInstance->log(msg, false);
+                  if(getJLinkInstance() != nullptr) {
+                      getJLinkInstance()->log(msg, false);
                   }
               },
               [](char const* msg) {
-                  if(JLinkInstance != nullptr) {
-                      JLinkInstance->log(msg, true);
+                  if(getJLinkInstance() != nullptr) {
+                      getJLinkInstance()->log(msg, true);
                   }
               });
             if(ret != nullptr) {
@@ -115,7 +119,7 @@ private:
 
     void execCommand(std::string const& cmd) {
         {
-            std::array<char, 1024> error_buffer;
+            std::array<char, 1024> error_buffer{};
 
             int const ret
               = JLINK_ExecCommand(cmd.c_str(), error_buffer.data(), error_buffer.size());
@@ -173,8 +177,8 @@ private:
         logMsgFunction = std::function<void(std::string_view)>{std::forward<LogF>(logFunction)};
         errorMsgFunction
           = std::function<void(std::string_view)>{std::forward<ErrorF>(errorFunction)};
-        JLinkInstance = this;
-        std::invoke(selectFunction);
+        getJLinkInstance() = this;
+        std::invoke(std::forward<SelectF>(selectFunction));
         connect(device, speed);
         checkError();
     }
@@ -184,7 +188,7 @@ public:
              typename ErrorF>
     JLink(std::string const& device,
           std::uint32_t      speed,
-          std::string const& ip,
+          std::string const& ipAddress,
           LogF&&             logFunction,
           ErrorF&&           errorFunction,
           std::uint16_t      port = 19020) {
@@ -193,9 +197,9 @@ public:
              std::forward<LogF>(logFunction),
              std::forward<ErrorF>(errorFunction),
              [&]() {
-                 int const ret = JLINK_SelectIP(ip.c_str(), port);
+                 char const ret = JLINK_SelectIP(ipAddress.c_str(), static_cast<int>(port));
                  if(ret != 0) {
-                     throw std::runtime_error{"JLINK_SelectIP(" + ip + ", "
+                     throw std::runtime_error{"JLINK_SelectIP(" + ipAddress + ", "
                                               + std::to_string(static_cast<int>(port))
                                               + ") failed: " + std::to_string(ret)};
                  }
@@ -213,19 +217,22 @@ public:
              std::forward<LogF>(logFunction),
              std::forward<ErrorF>(errorFunction),
              []() {
-                 int const ret = JLINK_SelectUSB(0);
+                 char const ret = JLINK_SelectUSB(0);
                  if(ret != 0) {
                      throw std::runtime_error{"JLINK_SelectUSB failed: " + std::to_string(ret)};
                  }
              });
     }
 
-    ~JLink() {
-        if(rttOpen) {
-            closeRtt();
+    ~JLink() noexcept {
+        try {
+            if(rttOpen) {
+                closeRtt();
+            }
+            JLINK_Close();
+            getJLinkInstance() = nullptr;
+        } catch(...) {
         }
-        JLINK_Close();
-        JLinkInstance = nullptr;
     }
 
     void startRtt(std::uint32_t buffers,
