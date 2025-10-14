@@ -292,6 +292,14 @@ public:
         }
     }
 
+    bool isHalted() {
+        char const ret = JLINK_IsHalted();
+        if(ret < 0) {
+            throw std::runtime_error{"JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))};
+        }
+        return ret > 0;
+    }
+
     void resetTarget() {
         int const ret = JLINK_Reset();
         if(ret < 0) {
