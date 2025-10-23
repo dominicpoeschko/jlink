@@ -38,13 +38,9 @@ private:
     void log(char const* msg,
              bool        isError) {
         if(isError) {
-            if(errorMsgFunction) {
-                errorMsgFunction(std::string_view{msg});
-            }
+            if(errorMsgFunction) { errorMsgFunction(std::string_view{msg}); }
         } else {
-            if(logMsgFunction) {
-                logMsgFunction(std::string_view{msg});
-            }
+            if(logMsgFunction) { logMsgFunction(std::string_view{msg}); }
         }
     }
 
@@ -57,14 +53,10 @@ private:
         {
             char const* ret = JLINK_OpenEx(
               [](char const* msg) {
-                  if(getJLinkInstance() != nullptr) {
-                      getJLinkInstance()->log(msg, false);
-                  }
+                  if(getJLinkInstance() != nullptr) { getJLinkInstance()->log(msg, false); }
               },
               [](char const* msg) {
-                  if(getJLinkInstance() != nullptr) {
-                      getJLinkInstance()->log(msg, true);
-                  }
+                  if(getJLinkInstance() != nullptr) { getJLinkInstance()->log(msg, true); }
               });
             if(ret != nullptr) {
                 throw std::runtime_error{std::string{"JLINK_OpenEx failed: "} + ret};
@@ -138,9 +130,7 @@ private:
     void checkError(bool doClose = true) {
         int const ret = JLINK_HasError();
         if(ret != 0) {
-            if(doClose) {
-                JLINK_Close();
-            }
+            if(doClose) { JLINK_Close(); }
             throw std::runtime_error{"JLINK_HasError: " + std::to_string(ret)};
         }
     }
@@ -226,21 +216,16 @@ public:
 
     ~JLink() noexcept {
         try {
-            if(rttOpen) {
-                closeRtt();
-            }
+            if(rttOpen) { closeRtt(); }
             JLINK_Close();
             getJLinkInstance() = nullptr;
-        } catch(...) {
-        }
+        } catch(...) {}
     }
 
     void startRtt(std::uint32_t buffers,
                   std::uint32_t configBlockAddress = 0) {
         auto config = [this](std::uint32_t address) {
-            if(rttOpen) {
-                closeRtt();
-            }
+            if(rttOpen) { closeRtt(); }
 
             RTTStart start{};
             start.configBlockAddress = address;
@@ -302,16 +287,12 @@ public:
 
     void resetTarget() {
         int const ret = JLINK_Reset();
-        if(ret < 0) {
-            throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)};
-        }
+        if(ret < 0) { throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)}; }
     }
 
     void flash(std::string const& hexFile) {
         int const ret = JLINK_DownloadFile(hexFile.c_str(), 0);
-        if(ret < 0) {
-            throw std::runtime_error{"JLINK_DownloadFile: " + std::to_string(ret)};
-        }
+        if(ret < 0) { throw std::runtime_error{"JLINK_DownloadFile: " + std::to_string(ret)}; }
     }
 
     RTTStatus readStatus() {
