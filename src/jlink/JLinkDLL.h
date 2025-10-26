@@ -29,6 +29,9 @@ void        JLINK_SetSpeed(std::uint32_t Speed);
 char        JLINK_IsConnected();
 int         JLINK_Connect();
 char        JLINK_IsHalted();
+void        JLINK_Halt();
+void        JLINK_Go();
+int         JLINK_ClrBPEx(unsigned handle);   // Use 0xFFFFFFFF to clear all
 int         JLINK_ExecCommand(char const* in,
                               char*       out,
                               int         bufferSize);
@@ -38,6 +41,7 @@ char        JLINK_SelectUSB(int port);
 char        JLINK_SelectIP(char const* host,
                            int         port);
 int         JLINK_Reset();
+int         JLINK_SetResetType(std::uint8_t ResetType);   // 0=Normal, 1=Core, 2=ResetPin
 int         JLINK_DownloadFile(char const*   sFileName,
                                std::uint32_t Addr);
 int         JLINK_RTTERMINAL_Control(std::uint32_t command,   //start 0 stop 1 getStatus 4

@@ -285,9 +285,27 @@ public:
         return ret > 0;
     }
 
+    void setResetType(std::uint8_t type) {
+        if(type > 2) {
+            throw std::runtime_error{"Invalid reset type: " + std::to_string(static_cast<int>(type))
+                                     + " (valid: 0=Normal, 1=Core, 2=ResetPin)"};
+        }
+        int const ret = JLINK_SetResetType(type);
+        if(ret < 0) { throw std::runtime_error{"JLINK_SetResetType: " + std::to_string(ret)}; }
+    }
+
     void resetTarget() {
         int const ret = JLINK_Reset();
         if(ret < 0) { throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)}; }
+    }
+
+    void halt() { JLINK_Halt(); }
+
+    void go() { JLINK_Go(); }
+
+    void clearAllBreakpoints() {
+        int const ret = JLINK_ClrBPEx(0xFFFFFFFF);
+        if(ret < 0) { throw std::runtime_error{"JLINK_ClrBPEx: " + std::to_string(ret)}; }
     }
 
     void flash(std::string const& hexFile) {
