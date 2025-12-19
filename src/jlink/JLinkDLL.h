@@ -21,6 +21,7 @@ struct RTTStatus {
     std::uint32_t padding{};
 };
 
+int         JLINK_EMU_GetNumDevices();
 char const* JLINK_OpenEx(void (*log)(char const*),
                          void (*errorLog)(char const*));
 char        JLINK_IsOpen();

@@ -49,7 +49,7 @@ private:
         if(JLINK_IsOpen() != 0) {
             throw std::runtime_error{std::string{"JLINK_IsOpen: Is allready opened"}};
         }
-
+        preOpenDisableDialogs();
         {
             char const* ret = JLINK_OpenEx(
               [](char const* msg) {
@@ -63,6 +63,7 @@ private:
             }
         }
 
+        preConnectDisableDialogs();
         {
             int const ret = JLINK_TIF_Select(1);   //SWD
             if(ret != 0) {
@@ -72,7 +73,6 @@ private:
         }
 
         JLINK_SetSpeed(speed);
-        preConnectDisableDialogs();
         execCommand("device = " + device);
         {
             char const ret = JLINK_IsConnected();
@@ -135,10 +135,10 @@ private:
         }
     }
 
+    void preOpenDisableDialogs() { execCommand("SuppressGUI 1"); }
+
     void preConnectDisableDialogs() {
-        execCommand("DisableAutoUpdateFW");
         execCommand("SilentUpdateFW");
-        execCommand("SuppressInfoUpdateFW");
         execCommand("HideDeviceSelection 1");
         execCommand("SuppressControlPanel");
         execCommand("DisableInfoWinFlashDL");
@@ -207,6 +207,8 @@ public:
              std::forward<LogF>(logFunction),
              std::forward<ErrorF>(errorFunction),
              []() {
+                 int const num = JLINK_EMU_GetNumDevices();
+                 if(num < 1) { throw std::runtime_error{"No JLink devices connected"}; }
                  char const ret = JLINK_SelectUSB(0);
                  if(ret != 0) {
                      throw std::runtime_error{"JLINK_SelectUSB failed: " + std::to_string(ret)};
