@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(jlink)
 
 set(JLINK_OPTIONAL
-    ON
+    OFF
     CACHE BOOL "Make jlinkarm library optional")
 
 if(JLINK_OPTIONAL)
