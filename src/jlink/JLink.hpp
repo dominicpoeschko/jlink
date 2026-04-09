@@ -145,7 +145,7 @@ private:
         execCommand("DisableInfoWinFlashBPs");
     }
 
-    void postConnectDisableDialogs() { execCommand("SetBatchMode 1"); }
+    void postConnectDisableDialogs() { /*execCommand("SetBatchMode 1");*/ }
 
     void closeRtt() {
         int const ret = JLINK_RTTERMINAL_Control(1, nullptr);   //stop
