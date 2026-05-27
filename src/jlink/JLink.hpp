@@ -34,11 +34,14 @@ private:
     std::function<void(std::string_view)> errorMsgFunction;
 
     bool rttOpen{false};
+    bool captureFlashErrors_{false};
+    bool flashErrorCaptured_{false};
 
     void log(char const* msg,
              bool        isError) {
         if(isError) {
             if(errorMsgFunction) { errorMsgFunction(std::string_view{msg}); }
+            if(captureFlashErrors_) { flashErrorCaptured_ = true; }
         } else {
             if(logMsgFunction) { logMsgFunction(std::string_view{msg}); }
         }
@@ -311,8 +314,14 @@ public:
     }
 
     void flash(std::string const& hexFile) {
-        int const ret = JLINK_DownloadFile(hexFile.c_str(), 0);
-        if(ret < 0) { throw std::runtime_error{"JLINK_DownloadFile: " + std::to_string(ret)}; }
+        captureFlashErrors_ = true;
+        flashErrorCaptured_ = false;
+        int const ret       = JLINK_DownloadFile(hexFile.c_str(), 0);
+        captureFlashErrors_ = false;
+        if(logMsgFunction) { logMsgFunction("JLINK_DownloadFile ret: " + std::to_string(ret)); }
+        if(ret < 0 || flashErrorCaptured_) {
+            throw std::runtime_error{"JLINK_DownloadFile failed: " + std::to_string(ret)};
+        }
     }
 
     RTTStatus readStatus() {
