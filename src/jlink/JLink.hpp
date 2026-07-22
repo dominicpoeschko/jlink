@@ -1,6 +1,7 @@
 #pragma once
 #include "jlink/JLinkDLL.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <compare>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <print>
 #include <span>
 #include <string>
@@ -68,7 +70,7 @@ private:
 
         preConnectDisableDialogs();
         {
-            int const ret = JLINK_TIF_Select(1);   //SWD
+            int const ret = JLINK_TIF_Select(1);   // SWD
             if(ret != 0) {
                 JLINK_Close();
                 throw std::runtime_error{"JLINK_TIF_Select failed: " + std::to_string(ret)};
@@ -87,7 +89,7 @@ private:
                 }
             }
         }
-        //dummy to force connect
+        // dummy to force connect
         JLINK_IsHalted();
 
         std::size_t tries = 10;
@@ -151,7 +153,7 @@ private:
     void postConnectDisableDialogs() { /*execCommand("SetBatchMode 1");*/ }
 
     void closeRtt() {
-        int const ret = JLINK_RTTERMINAL_Control(1, nullptr);   //stop
+        int const ret = JLINK_RTTERMINAL_Control(1, nullptr);   // stop
 
         if(ret < 0) {
             throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: " + std::to_string(ret)};
@@ -227,25 +229,28 @@ public:
         } catch(...) {}
     }
 
-    void startRtt(std::uint32_t buffers,
-                  std::uint32_t configBlockAddress = 0) {
+    // buffers is the total buffer count (up + down)
+    RTTStatus startRtt(std::uint32_t buffers,
+                       std::uint32_t configBlockAddress = 0) {
         auto config = [this](std::uint32_t address) {
             if(rttOpen) { closeRtt(); }
 
             RTTStart start{};
             start.configBlockAddress = address;
-            int const ret            = JLINK_RTTERMINAL_Control(0, &start);   //start
+            int const ret            = JLINK_RTTERMINAL_Control(0, &start);   // start
 
             if(ret < 0) {
                 throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: " + std::to_string(ret)};
             }
             rttOpen = true;
         };
-        auto connectRtt = [&]() {
+        RTTStatus status{};
+        auto      connectRtt = [&]() {
             std::size_t tries{100};
-            RTTStatus   status{readStatus()};
+            status = readStatus();
             while(tries != 0
-                  && (status.isRunning == 0 || status.numUpBuffers != static_cast<int>(buffers)))
+                  && (status.isRunning == 0
+                      || status.numUpBuffers + status.numDownBuffers != static_cast<int>(buffers)))
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds{10});
                 status = readStatus();
@@ -261,6 +266,7 @@ public:
                 throw std::runtime_error{"JLINK_RTTERMINAL_Control failed: timeout"};
             }
         }
+        return status;
     }
 
     std::span<std::byte> rttRead(std::uint32_t        bufferNumber,
@@ -272,6 +278,47 @@ public:
             throw std::runtime_error{"JLINK_RTTERMINAL_Read failed: " + std::to_string(ret)};
         }
         return buffer.subspan(0, static_cast<std::size_t>(ret));
+    }
+
+    // returns the number of bytes accepted, partial writes are normal when the
+    // target side down buffer is full
+    std::size_t rttWrite(std::uint32_t              bufferNumber,
+                         std::span<std::byte const> buffer) {
+        int const ret = JLINK_RTTERMINAL_Write(bufferNumber,
+                                               reinterpret_cast<char const*>(buffer.data()),
+                                               static_cast<std::uint32_t>(buffer.size()));
+        if(ret < 0) {
+            throw std::runtime_error{"JLINK_RTTERMINAL_Write failed: " + std::to_string(ret)};
+        }
+        return static_cast<std::size_t>(ret);
+    }
+
+    struct BufferDesc {
+        std::uint32_t index{};
+        bool          isDown{};
+        std::string   name;
+        std::uint32_t size{};
+        std::uint32_t flags{};
+    };
+
+    // never throws: getDesc support depends on the DLL version, callers fall back on nullopt
+    std::optional<BufferDesc> rttBufferDesc(bool          down,
+                                            std::uint32_t index) noexcept {
+        RTTBufferDesc desc{};
+        desc.bufferIndex = static_cast<int>(index);
+        desc.direction   = down ? 1U : 0U;
+        try {
+            int const ret = JLINK_RTTERMINAL_Control(2, &desc);   // getDesc
+            if(ret < 0) { return std::nullopt; }
+        } catch(...) { return std::nullopt; }
+        auto const nameEnd = std::find(desc.name.begin(), desc.name.end(), '\0');
+        return BufferDesc{
+          index,
+          down,
+          std::string{desc.name.begin(), nameEnd},
+          desc.sizeOfBuffer,
+          desc.flags
+        };
     }
 
     void checkConnected() {

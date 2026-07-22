@@ -4,7 +4,6 @@
 #include <cstdint>
 
 extern "C" {
-
 struct RTTStart {
     std::uint32_t                configBlockAddress{};
     std::array<std::uint32_t, 3> padding{};
@@ -21,11 +20,19 @@ struct RTTStatus {
     std::uint32_t padding{};
 };
 
+struct RTTBufferDesc {
+    int                  bufferIndex{};
+    std::uint32_t        direction{};   // 0 = up (target -> host), 1 = down (host -> target)
+    std::array<char, 32> name{};
+    std::uint32_t        sizeOfBuffer{};
+    std::uint32_t        flags{};
+};
+
 int         JLINK_EMU_GetNumDevices();
 char const* JLINK_OpenEx(void (*log)(char const*),
                          void (*errorLog)(char const*));
 char        JLINK_IsOpen();
-int         JLINK_TIF_Select(int interface);   //JTAG 0 SWD 1
+int         JLINK_TIF_Select(int interface);   // JTAG 0 SWD 1
 void        JLINK_SetSpeed(std::uint32_t Speed);
 char        JLINK_IsConnected();
 int         JLINK_Connect();
@@ -45,9 +52,12 @@ int         JLINK_Reset();
 int         JLINK_SetResetType(std::uint8_t ResetType);   // 0=Normal, 1=Core, 2=ResetPin
 int         JLINK_DownloadFile(char const*   sFileName,
                                std::uint32_t Addr);
-int         JLINK_RTTERMINAL_Control(std::uint32_t command,   //start 0 stop 1 getStatus 4
-                                     void*);
-int         JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
-                                  char*         buffer,
-                                  std::uint32_t bufferSize);
+int JLINK_RTTERMINAL_Control(std::uint32_t command,   // start 0 stop 1 getDesc 2 getStatus 4
+                             void*);
+int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
+                          char*         buffer,
+                          std::uint32_t bufferSize);
+int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
+                           char const*   buffer,
+                           std::uint32_t bufferSize);
 }
