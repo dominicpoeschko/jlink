@@ -8,12 +8,15 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <format>
 #include <functional>
 #include <optional>
 #include <print>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 struct JLink;
 
@@ -67,6 +70,7 @@ private:
                 throw std::runtime_error{std::string{"JLINK_OpenEx failed: "} + ret};
             }
         }
+        logProbe();
 
         preConnectDisableDialogs();
         {
@@ -142,6 +146,22 @@ private:
 
     void preOpenDisableDialogs() { execCommand("SuppressGUI 1"); }
 
+    // One line about the probe that was opened, so a log names the J-Link it came from.
+    void logProbe() {
+        if(!logMsgFunction) { return; }
+        std::array<char, 256> product{};
+        std::array<char, 256> firmware{};
+        JLINK_EMU_GetProductName(product.data(), static_cast<std::uint32_t>(product.size() - 1));
+        JLINK_GetFirmwareString(firmware.data(), static_cast<int>(firmware.size() - 1));
+        int const hw = JLINK_GetHardwareVersion();
+        logMsgFunction(std::format("{} SN {} HW {}.{:02} FW {}",
+                                   cstr(product),
+                                   JLINK_GetSN(),
+                                   hw / 10000 % 100,
+                                   hw / 100 % 100,
+                                   cstr(firmware)));
+    }
+
     void preConnectDisableDialogs() {
         execCommand("SilentUpdateFW");
         execCommand("HideDeviceSelection 1");
@@ -179,48 +199,176 @@ private:
     }
 
 public:
-    template<typename LogF,
-             typename ErrorF>
-    JLink(std::string const& device,
-          std::uint32_t      speed,
-          std::string const& ipAddress,
-          LogF&&             logFunction,
-          ErrorF&&           errorFunction,
-          std::uint16_t      port = 19020) {
-        init(device,
-             speed,
-             std::forward<LogF>(logFunction),
-             std::forward<ErrorF>(errorFunction),
-             [&]() {
-                 char const ret = JLINK_SelectIP(ipAddress.c_str(), static_cast<int>(port));
-                 if(ret != 0) {
-                     throw std::runtime_error{"JLINK_SelectIP(" + ipAddress + ", "
-                                              + std::to_string(static_cast<int>(port))
-                                              + ") failed: " + std::to_string(ret)};
-                 }
-             });
+    // Which probe. A host means J-Link over IP at that address; otherwise `probe` names
+    // the J-Link by serial number or nickname (JLinkExe -USB takes the same two), looked
+    // for on USB first and then among the J-Links on the network. Empty means "the only
+    // one on USB". Two probes on the bus and no name is an error, not a guess: the wrong
+    // board's log looks exactly like the right one's.
+    struct Connection {
+        std::string   host{};
+        std::uint16_t port{19020};
+        std::string   probe{};
+    };
+
+    // The probes the DLL sees on the given host interfaces (EmuHostUsb, EmuHostIp or
+    // both), for the selection error messages and for tools that want to list them.
+    // Listing IP probes is a UDP discovery and takes a moment.
+    static std::vector<EmuConnectInfo> probes(int hostInterfaces) {
+        int const n = JLINK_EMU_GetList(hostInterfaces, nullptr, 0);
+        if(n < 0) { throw std::runtime_error{"JLINK_EMU_GetList failed: " + std::to_string(n)}; }
+        std::vector<EmuConnectInfo> infos(static_cast<std::size_t>(n));
+        if(infos.empty()) { return infos; }
+        int const filled = JLINK_EMU_GetList(hostInterfaces, infos.data(), n);
+        if(filled < 0) {
+            throw std::runtime_error{"JLINK_EMU_GetList failed: " + std::to_string(filled)};
+        }
+        infos.resize(std::min(static_cast<std::size_t>(filled), infos.size()));
+        return infos;
+    }
+
+    static std::vector<EmuConnectInfo> usbProbes() { return probes(EmuHostUsb); }
+
+    template<std::size_t N>
+    static std::string_view cstr(std::array<char,
+                                            N> const& chars) {
+        auto const end = std::find(chars.begin(), chars.end(), '\0');
+        return std::string_view{chars.data(), static_cast<std::size_t>(end - chars.begin())};
+    }
+
+    static std::string_view nickNameOf(EmuConnectInfo const& info) { return cstr(info.nickName); }
+
+    static std::string_view productOf(EmuConnectInfo const& info) { return cstr(info.product); }
+
+    // `J-Link EDU Mini 123456 "board-a", J-Link PLUS 654321`, or `none`.
+    static std::string describe(std::vector<EmuConnectInfo> const& probes) {
+        if(probes.empty()) { return "none"; }
+        std::string out;
+        for(auto const& p : probes) {
+            if(!out.empty()) { out += ", "; }
+            auto const product = productOf(p);
+            if(!product.empty()) {
+                out += product;
+                out += ' ';
+            }
+            out += std::to_string(p.serialNumber);
+            auto const nick = nickNameOf(p);
+            if(!nick.empty()) {
+                out += " \"";
+                out += nick;
+                out += '"';
+            }
+        }
+        return out;
+    }
+
+    // A probe as a tool shows it. `serialNumber` (or `nickName`) is what Connection::probe
+    // takes to pick it.
+    struct Probe {
+        std::uint32_t serialNumber{};
+        std::string   product{};
+        std::string   nickName{};
+        bool          onUsb{};
+    };
+
+    // Every J-Link on USB and on the network. The network part is a UDP discovery and
+    // takes a moment.
+    static std::vector<Probe> listProbes() {
+        std::vector<Probe> out;
+        for(auto const& p : probes(EmuHostUsb | EmuHostIp)) {
+            out.push_back(Probe{p.serialNumber,
+                                std::string{productOf(p)},
+                                std::string{nickNameOf(p)},
+                                (p.connection & EmuHostUsb) != 0});
+        }
+        return out;
     }
 
     template<typename LogF,
              typename ErrorF>
     JLink(std::string const& device,
           std::uint32_t      speed,
+          Connection const&  connection,
           LogF&&             logFunction,
           ErrorF&&           errorFunction) {
         init(device,
              speed,
              std::forward<LogF>(logFunction),
              std::forward<ErrorF>(errorFunction),
-             []() {
-                 int const num = JLINK_EMU_GetNumDevices();
-                 if(num < 1) { throw std::runtime_error{"No JLink devices connected"}; }
-                 char const ret = JLINK_SelectUSB(0);
-                 if(ret != 0) {
-                     throw std::runtime_error{"JLINK_SelectUSB failed: " + std::to_string(ret)};
+             [&]() {
+                 if(!connection.host.empty()) {
+                     selectIp(connection.host, connection.port);
+                 } else {
+                     selectProbe(connection.probe);
                  }
              });
     }
 
+private:
+    static void selectIp(std::string const& host,
+                         std::uint16_t      port) {
+        char const ret = JLINK_SelectIP(host.c_str(), static_cast<int>(port));
+        if(ret != 0) {
+            throw std::runtime_error{"JLINK_SelectIP(" + host + ", "
+                                     + std::to_string(static_cast<unsigned>(port))
+                                     + ") failed: " + std::to_string(static_cast<int>(ret))};
+        }
+    }
+
+    // The probe named by serial number or nickname, or nullptr.
+    static EmuConnectInfo const* find(std::vector<EmuConnectInfo> const& probes,
+                                      std::string const&                 probe) {
+        bool const numeric = !probe.empty() && std::ranges::all_of(probe, [](char c) {
+            return c >= '0' && c <= '9';
+        });
+        for(auto const& p : probes) {
+            if((numeric && std::to_string(p.serialNumber) == probe) || nickNameOf(p) == probe) {
+                return &p;
+            }
+        }
+        return nullptr;
+    }
+
+    static void selectUsb(EmuConnectInfo const& p) {
+        int const ret = JLINK_EMU_SelectByUSBSN(p.serialNumber);
+        if(ret < 0) {
+            throw std::runtime_error{"JLINK_EMU_SelectByUSBSN(" + std::to_string(p.serialNumber)
+                                     + ") failed: " + std::to_string(ret)};
+        }
+    }
+
+    // USB first; a name that is not on USB is then looked for among the J-Links on the
+    // network (by serial number or nickname, selected by serial number).
+    static void selectProbe(std::string const& probe) {
+        auto const usb = usbProbes();
+
+        if(probe.empty()) {
+            if(usb.empty()) { throw std::runtime_error{"No JLink devices connected"}; }
+            if(usb.size() > 1) {
+                throw std::runtime_error{
+                  "more than one J-Link on USB, name the one to use (serial number or "
+                  "nickname): "
+                  + describe(usb)};
+            }
+            selectUsb(usb.front());
+            return;
+        }
+
+        if(auto const* p = find(usb, probe); p != nullptr) {
+            selectUsb(*p);
+            return;
+        }
+
+        auto const ip = probes(EmuHostIp);
+        if(auto const* p = find(ip, probe); p != nullptr) {
+            JLINK_EMU_SelectIPBySN(p->serialNumber);   // reports nothing, the open fails
+            return;
+        }
+
+        throw std::runtime_error{"no J-Link \"" + probe + "\" found, on USB: " + describe(usb)
+                                 + ", on the network: " + describe(ip)};
+    }
+
+public:
     ~JLink() noexcept {
         try {
             if(rttOpen) { closeRtt(); }

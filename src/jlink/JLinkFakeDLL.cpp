@@ -18,6 +18,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -104,8 +105,63 @@ FakeJLink& fake() {
 
 }   // namespace
 
+namespace {
+constexpr std::string_view fakeProduct{"J-Link fake"};
+constexpr std::string_view fakeNick{"fake"};
+constexpr std::string_view fakeFirmware{"J-Link fake compiled today"};
+constexpr std::uint32_t    fakeSerial{1};
+constexpr int              fakeHwVersion{10000};   // 1.00
+
+template<typename Size>
+void copyCString(std::string_view text,
+                 char*            buffer,
+                 Size             bufferSize) {
+    if(buffer == nullptr || bufferSize <= 0) { return; }
+    auto const n = std::min(text.size(), static_cast<std::size_t>(bufferSize) - 1);
+    std::copy_n(text.begin(), n, buffer);
+    buffer[n] = '\0';
+}
+}   // namespace
+
 extern "C" {
 int JLINK_EMU_GetNumDevices() { return 1; }
+
+// One probe, on USB only: a name that is not on USB makes the host look on the network
+// and find nothing there.
+int JLINK_EMU_GetList(int             hostInterfaces,
+                      EmuConnectInfo* infos,
+                      int             maxInfos) {
+    if((hostInterfaces & EmuHostUsb) == 0) { return 0; }
+    if(maxInfos < 1 || infos == nullptr) { return 1; }
+    infos[0]              = EmuConnectInfo{};
+    infos[0].serialNumber = fakeSerial;
+    infos[0].connection   = EmuHostUsb;
+    infos[0].hwVersion    = static_cast<std::uint32_t>(fakeHwVersion);
+    copyCString(fakeProduct, infos[0].product.data(), infos[0].product.size());
+    copyCString(fakeNick, infos[0].nickName.data(), infos[0].nickName.size());
+    copyCString(fakeFirmware, infos[0].fwString.data(), infos[0].fwString.size());
+    return 1;
+}
+
+int JLINK_EMU_SelectByUSBSN(std::uint32_t serialNumber) {
+    return serialNumber == fakeSerial ? 0 : -1;
+}
+
+void JLINK_EMU_SelectIPBySN(std::uint32_t) {}
+
+std::uint32_t JLINK_GetSN() { return fakeSerial; }
+
+void JLINK_EMU_GetProductName(char*         buffer,
+                              std::uint32_t bufferSize) {
+    copyCString(fakeProduct, buffer, bufferSize);
+}
+
+int JLINK_GetHardwareVersion() { return fakeHwVersion; }
+
+void JLINK_GetFirmwareString(char* buffer,
+                             int   bufferSize) {
+    copyCString(fakeFirmware, buffer, bufferSize);
+}
 
 char const* JLINK_OpenEx(void (*log)(char const*),
                          void (*errorLog)(char const*)) {
