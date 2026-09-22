@@ -38,9 +38,20 @@ private:
     std::function<void(std::string_view)> logMsgFunction;
     std::function<void(std::string_view)> errorMsgFunction;
 
-    bool rttOpen{false};
-    bool captureFlashErrors_{false};
-    bool flashErrorCaptured_{false};
+public:
+    /// One word written to the target before every reset and download (setPreResetCommands).
+    struct MemoryWrite {
+        std::uint32_t address{};
+        std::uint32_t value{};
+
+        bool operator==(MemoryWrite const&) const = default;
+    };
+
+private:
+    bool                     rttOpen{false};
+    bool                     captureFlashErrors_{false};
+    bool                     flashErrorCaptured_{false};
+    std::vector<MemoryWrite> preResetWrites_{};
 
     void log(char const* msg,
              bool        isError) {
@@ -477,12 +488,25 @@ public:
         }
     }
 
+    /// Retries a failed poll a few times before throwing. Under heavy traffic on the host's USB
+    /// controller a single call can fail and the next one succeed; dropping the session at once
+    /// forces a reconnect, which the DLL may answer by resetting the target via nRESET.
     bool isHalted() {
-        char const ret = JLINK_IsHalted();
-        if(ret < 0) {
-            throw std::runtime_error{"JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))};
+        static constexpr int Tries = 4;
+        for(int attempt = 1;; ++attempt) {
+            char const ret = JLINK_IsHalted();
+            if(ret >= 0) { return ret > 0; }
+            if(attempt >= Tries) {
+                throw std::runtime_error{"JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))
+                                         + " (" + std::to_string(Tries) + " tries)"};
+            }
+            if(errorMsgFunction) {
+                errorMsgFunction("JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))
+                                 + ", try " + std::to_string(attempt) + " of "
+                                 + std::to_string(Tries) + " -- the session is kept");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
-        return ret > 0;
     }
 
     void setResetType(std::uint8_t type) {
@@ -494,10 +518,93 @@ public:
         if(ret < 0) { throw std::runtime_error{"JLINK_SetResetType: " + std::to_string(ret)}; }
     }
 
+    /// Parses one J-Link Commander line of the subset the printer runs before a reset:
+    /// `w4 <address> <value>`, numbers in hex (0x...) or decimal. The chip package's
+    /// TARGET_JLINK_CONNECT_COMMANDS come in this form (the RP chips park core 1 with them);
+    /// anything else throws, so a line the printer cannot run is an error at startup and not
+    /// a reset that silently skips it.
+    static MemoryWrite parseCommand(std::string_view line) {
+        auto const fail = [&](std::string_view why) {
+            return std::runtime_error{"pre-reset command \"" + std::string{line} + "\": "
+                                      + std::string{why} + " (only \"w4 <address> <value>\")"};
+        };
+        std::vector<std::string_view> words;
+        for(std::size_t pos = 0; pos < line.size();) {
+            pos = line.find_first_not_of(" \t", pos);
+            if(pos == std::string_view::npos) { break; }
+            auto const end = std::min(line.find_first_of(" \t", pos), line.size());
+            words.push_back(line.substr(pos, end - pos));
+            pos = end;
+        }
+        if(words.size() != 3 || (words[0] != "w4" && words[0] != "W4")) {
+            throw fail("not a w4 command");
+        }
+        auto const number = [&](std::string_view word) {
+            std::uint64_t base = 10;
+            if(word.starts_with("0x") || word.starts_with("0X")) {
+                word.remove_prefix(2);
+                base = 16;
+            }
+            auto const bad
+              = [&]() { return fail("\"" + std::string{word} + "\" is not a 32 bit number"); };
+            if(word.empty()) { throw bad(); }
+            std::uint64_t value{};
+            for(char const c : word) {
+                std::uint64_t digit{};
+                if(c >= '0' && c <= '9') {
+                    digit = static_cast<std::uint64_t>(c - '0');
+                } else if(base == 16 && c >= 'a' && c <= 'f') {
+                    digit = static_cast<std::uint64_t>(c - 'a' + 10);
+                } else if(base == 16 && c >= 'A' && c <= 'F') {
+                    digit = static_cast<std::uint64_t>(c - 'A' + 10);
+                } else {
+                    throw bad();
+                }
+                value = value * base + digit;
+                if(value > 0xFFFF'FFFFU) { throw bad(); }
+            }
+            return static_cast<std::uint32_t>(value);
+        };
+        return MemoryWrite{number(words[1]), number(words[2])};
+    }
+
+    /// Words written, in order, before every resetTarget() and flash(): JLINK_Reset and the
+    /// reset inside a download restart only the connected core, and a chip with a second core
+    /// may need it stopped first. Which words is the chip package's business, not this class's.
+    void setPreResetCommands(std::vector<MemoryWrite> writes) {
+        preResetWrites_ = std::move(writes);
+    }
+
+    void runPreResetCommands() {
+        if(preResetWrites_.empty()) { return; }
+        std::string rets;
+        for(auto const& w : preResetWrites_) {
+            rets += " " + std::to_string(JLINK_WriteU32(w.address, w.value));
+        }
+        if(logMsgFunction) {
+            logMsgFunction("pre-reset commands: " + std::to_string(preResetWrites_.size())
+                           + " written (rets" + rets + ")");
+        }
+    }
+
     void resetTarget() {
+        runPreResetCommands();
         int const ret = JLINK_Reset();
         if(ret < 0) { throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)}; }
     }
+
+    /// Reads target memory while the core keeps running.
+    void readMemory(std::uint32_t        address,
+                    std::span<std::byte> out) {
+        int const ret = JLINK_ReadMem(address, static_cast<std::uint32_t>(out.size()), out.data());
+        if(ret != 0) { throw std::runtime_error{"JLINK_ReadMem: " + std::to_string(ret)}; }
+    }
+
+    /// Cortex-M core registers by DLL index; only meaningful while the core is halted. The
+    /// indices were verified on RP2040 and RP2350 halted in a fault, not against SEGGER's docs.
+    enum class CoreRegister : int { sp = 13, lr = 14, pc = 15, xpsr = 16, msp = 17, psp = 18 };
+
+    std::uint32_t readRegister(CoreRegister r) { return JLINK_ReadReg(static_cast<int>(r)); }
 
     void halt() { JLINK_Halt(); }
 
@@ -509,6 +616,7 @@ public:
     }
 
     void flash(std::string const& hexFile) {
+        runPreResetCommands();
         captureFlashErrors_ = true;
         flashErrorCaptured_ = false;
         int const ret       = JLINK_DownloadFile(hexFile.c_str(), 0);

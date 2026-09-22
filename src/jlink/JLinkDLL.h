@@ -124,6 +124,14 @@ void          JLINK_SetSpeed(std::uint32_t Speed);
 char          JLINK_IsConnected();
 int           JLINK_Connect();
 char          JLINK_IsHalted();
+// Works while the core runs. Returns 0 on success.
+int JLINK_ReadMem(std::uint32_t address,
+                  std::uint32_t numBytes,
+                  void*         data);
+// Works while the core runs. Returns 0 on success.
+int           JLINK_WriteU32(std::uint32_t address,
+                             std::uint32_t data);
+std::uint32_t JLINK_ReadReg(int registerIndex);
 void          JLINK_Halt();
 void          JLINK_Go();
 int           JLINK_ClrBPEx(unsigned handle);   // Use 0xFFFFFFFF to clear all

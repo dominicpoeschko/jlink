@@ -10,6 +10,8 @@
 //   FAKE_JLINK_NO_GETDESC       if set, getDesc fails so hosts exercise their positional
 //                               pairing fallback
 
+#include "JLinkFake.h"
+
 #include "JLinkDLL.h"
 
 #include <algorithm>
@@ -123,6 +125,11 @@ void copyCString(std::string_view text,
 }
 }   // namespace
 
+namespace {
+std::mutex                                           writesMutex;
+std::vector<std::pair<std::uint32_t, std::uint32_t>> writes;
+}   // namespace
+
 extern "C" {
 int JLINK_EMU_GetNumDevices() { return 1; }
 
@@ -193,6 +200,29 @@ char JLINK_IsConnected() {
 int JLINK_Connect() { return 0; }
 
 char JLINK_IsHalted() { return 0; }
+
+// Each byte reads as the low byte of its address, so a test can check what it got.
+int JLINK_ReadMem(std::uint32_t address,
+                  std::uint32_t numBytes,
+                  void*         data) {
+    auto* const out = static_cast<unsigned char*>(data);
+    for(std::uint32_t i = 0; i != numBytes; ++i) {
+        out[i] = static_cast<unsigned char>((address + i) & 0xFFU);
+    }
+    return 0;
+}
+
+int JLINK_WriteU32(std::uint32_t address,
+                   std::uint32_t data) {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    writes.emplace_back(address, data);
+    return 0;
+}
+
+// A register reads as 0x1000 + its index.
+std::uint32_t JLINK_ReadReg(int registerIndex) {
+    return 0x1000U + static_cast<std::uint32_t>(registerIndex);
+}
 
 void JLINK_Halt() {}
 
@@ -335,4 +365,16 @@ int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
     }
     return static_cast<int>(n);
 }
+}
+
+std::vector<std::pair<std::uint32_t,
+                      std::uint32_t>>
+fakeJLinkWrites() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    return writes;
+}
+
+void fakeJLinkClearWrites() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    writes.clear();
 }
