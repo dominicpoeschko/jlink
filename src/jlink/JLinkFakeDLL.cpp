@@ -201,11 +201,19 @@ int JLINK_Connect() { return 0; }
 
 char JLINK_IsHalted() { return 0; }
 
-// Each byte reads as the low byte of its address, so a test can check what it got.
+// Each byte reads as the low byte of its address, so a test can check what it got; DHCSR reads
+// as a running core that was not reset (S_RESET_ST, bit 25, clear).
 int JLINK_ReadMem(std::uint32_t address,
                   std::uint32_t numBytes,
                   void*         data) {
     auto* const out = static_cast<unsigned char*>(data);
+    if(address == 0xE000'EDF0 && numBytes == 4) {
+        std::uint32_t const dhcsr = 0x0100'0000U;
+        for(std::uint32_t i = 0; i != numBytes; ++i) {
+            out[i] = static_cast<unsigned char>(dhcsr >> (8 * i));
+        }
+        return 0;
+    }
     for(std::uint32_t i = 0; i != numBytes; ++i) {
         out[i] = static_cast<unsigned char>((address + i) & 0xFFU);
     }
