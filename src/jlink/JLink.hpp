@@ -600,6 +600,13 @@ public:
         if(ret != 0) { throw std::runtime_error{"JLINK_ReadMem: " + std::to_string(ret)}; }
     }
 
+    /// Writes one 32-bit word while the core keeps running.
+    void writeWord(std::uint32_t address,
+                   std::uint32_t value) {
+        int const ret = JLINK_WriteU32(address, value);
+        if(ret != 0) { throw std::runtime_error{"JLINK_WriteU32: " + std::to_string(ret)}; }
+    }
+
     /// Cortex-M core registers by DLL index; only meaningful while the core is halted. The
     /// indices were verified on RP2040 and RP2350 halted in a fault, not against SEGGER's docs.
     enum class CoreRegister : int { sp = 13, lr = 14, pc = 15, xpsr = 16, msp = 17, psp = 18 };
