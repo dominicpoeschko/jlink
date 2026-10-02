@@ -155,4 +155,9 @@ int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
 int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
                            char const*   buffer,
                            std::uint32_t bufferSize);
+
+// Only while the core is halted. 0 on success. The index is SEGGER's JLINKARM_CM3_REG_*
+// (JLINKARM_Const.h; the ARM_REG argument of JLinkARMDLL.h is an int-sized enum).
+char JLINK_WriteReg(int           registerIndex,
+                    std::uint32_t data);
 }

@@ -428,6 +428,12 @@ public:
         return status;
     }
 
+    /// Stops the DLL's RTT and with it its background reads of the target's rings (startRtt
+    /// starts it again). Before a session ends with no further access to the target.
+    void stopRtt() {
+        if(rttOpen) { closeRtt(); }
+    }
+
     std::span<std::byte> rttRead(std::uint32_t        bufferNumber,
                                  std::span<std::byte> buffer) {
         int const ret = JLINK_RTTERMINAL_Read(bufferNumber,
@@ -600,6 +606,21 @@ public:
         if(ret != 0) { throw std::runtime_error{"JLINK_ReadMem: " + std::to_string(ret)}; }
     }
 
+    /// Disables and clears every NVIC interrupt, as a reset leaves them (flashRamImage).
+    void clearNvic() {
+        std::array<std::byte, 4> raw{};
+        readMemory(0xE000ED00, raw);   // CPUID
+        std::uint32_t const cpuid = std::to_integer<std::uint32_t>(raw[0])
+                                  | std::to_integer<std::uint32_t>(raw[1]) << 8
+                                  | std::to_integer<std::uint32_t>(raw[2]) << 16
+                                  | std::to_integer<std::uint32_t>(raw[3]) << 24;
+        std::uint32_t const words = ((cpuid >> 16) & 0xF) == 0xC ? 1 : 16;
+        for(std::uint32_t n = 0; n != words; ++n) {
+            writeWord(0xE000E180 + 4 * n, 0xFFFF'FFFF);   // NVIC_ICERn
+            writeWord(0xE000E280 + 4 * n, 0xFFFF'FFFF);   // NVIC_ICPRn
+        }
+    }
+
     /// Writes one 32-bit word while the core keeps running.
     void writeWord(std::uint32_t address,
                    std::uint32_t value) {
@@ -608,10 +629,21 @@ public:
     }
 
     /// Cortex-M core registers by DLL index; only meaningful while the core is halted. The
-    /// indices were verified on RP2040 and RP2350 halted in a fault, not against SEGGER's docs.
+    /// indices are SEGGER's JLINKARM_CM3_REG_* (JLINKARM_Const.h).
     enum class CoreRegister : int { sp = 13, lr = 14, pc = 15, xpsr = 16, msp = 17, psp = 18 };
 
     std::uint32_t readRegister(CoreRegister r) { return JLINK_ReadReg(static_cast<int>(r)); }
+
+    /// Only while the core is halted.
+    void writeRegister(CoreRegister  r,
+                       std::uint32_t value) {
+        char const ret = JLINK_WriteReg(static_cast<int>(r), value);
+        if(ret != 0) {
+            throw std::runtime_error{"JLINK_WriteReg(" + std::to_string(static_cast<int>(r)) + ", "
+                                     + std::format("{:#010x}", value)
+                                     + "): " + std::to_string(static_cast<int>(ret))};
+        }
+    }
 
     void halt() { JLINK_Halt(); }
 
@@ -632,6 +664,72 @@ public:
         if(ret < 0 || flashErrorCaptured_) {
             throw std::runtime_error{"JLINK_DownloadFile failed: " + std::to_string(ret)};
         }
+    }
+
+    /// Where an image that lives in RAM starts: what a reset would take from its vector table.
+    struct RamImageStart {
+        std::uint32_t vectorTable{};   // its address, for VTOR
+        std::uint32_t initialSp{};     // word 0
+        std::uint32_t resetVector{};   // word 1, a Thumb address (bit 0 set)
+
+        bool operator==(RamImageStart const&) const = default;
+    };
+
+    // VTOR: Armv6-M ARM DDI0419E Table B3-4 (B3.2.2), Armv8-M ARM DDI0553B.y D1.2.272, RP2040
+    // data sheet 2.4.8 Table 106.
+    static constexpr std::uint32_t VtorAddress = 0xE000'ED08;
+    // xPSR with only EPSR.T (bit 24) set: Thumb state, IPSR 0 = Thread mode, the state a reset
+    // leaves (DDI0419E B1.4.2, B1.5.5 "Reset behavior").
+    static constexpr std::uint32_t ResetXpsr = 0x0100'0000;
+
+    /// Loads an image that lives in RAM and starts it, like the SDK's J-Link script for a
+    /// RAM_ONLY image (cmake/jlink.cmake). A reset after the download would run the boot ROM, so
+    /// this does by hand what a reset does with THIS image's vector table (DDI0419E B1.5.5):
+    /// VTOR, SP_main = word 0, xPSR = Thumb, PC = word 1. The two words are read back after the
+    /// download first: a download that did not land is an error, not a jump into stale RAM.
+    void flashRamImage(std::string const&   hexFile,
+                       RamImageStart const& start) {
+        resetTarget();
+        halt();
+        if(!isHalted()) { throw std::runtime_error{"RAM image: the core did not halt"}; }
+        flash(hexFile);
+        std::array<std::byte, 8> raw{};
+        readMemory(start.vectorTable, raw);
+        auto const word = [&](std::size_t at) {
+            std::uint32_t v{};
+            for(std::size_t i = 0; i != 4; ++i) {
+                v |= std::to_integer<std::uint32_t>(raw[at + i]) << (8 * i);
+            }
+            return v;
+        };
+        if(word(0) != start.initialSp || word(4) != start.resetVector) {
+            throw std::runtime_error{
+              std::format("RAM image: the target holds {:#010x} {:#010x} at the vector table "
+                          "{:#010x} after the download, the image {:#010x} {:#010x}",
+                          word(0),
+                          word(4),
+                          start.vectorTable,
+                          start.initialSp,
+                          start.resetVector)};
+        }
+        // A reset would also leave the NVIC with nothing enabled or pending; without that an
+        // interrupt the previous code left on (e.g. the boot ROM's USB IRQ in BOOTSEL) is taken
+        // before the image's first instruction. NVIC_ICER/ICPR: one register on Armv6-M (DDI0419E
+        // B3.4), sixteen on Armv7-M/Armv8-M (DDI0553B.y D1.2.183/184); CPUID.ARCHITECTURE 0xC =
+        // Armv6-M (DDI0419E B3.2.3).
+        clearNvic();
+        writeWord(VtorAddress, start.vectorTable);
+        writeRegister(CoreRegister::msp, start.initialSp);
+        writeRegister(CoreRegister::xpsr, ResetXpsr);
+        writeRegister(CoreRegister::pc, start.resetVector & ~1U);
+        if(logMsgFunction) {
+            logMsgFunction(
+              std::format("RAM image started: VTOR {:#010x}, MSP {:#010x}, PC {:#010x}",
+                          start.vectorTable,
+                          start.initialSp,
+                          start.resetVector & ~1U));
+        }
+        go();
     }
 
     RTTStatus readStatus() {

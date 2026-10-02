@@ -9,6 +9,10 @@
 //   FAKE_JLINK_DUPLEX_CHANNELS  comma separated channel names, default "echo"
 //   FAKE_JLINK_NO_GETDESC       if set, getDesc fails so hosts exercise their positional
 //                               pairing fallback
+//
+// The core is halted by JLINK_Halt and runs again on JLINK_Go. JLINK_DownloadFile reads an Intel
+// HEX file, if there is one by that name, into the fake memory, which JLINK_ReadMem then returns;
+// every other byte reads as the low byte of its address.
 
 #include "JLinkFake.h"
 
@@ -18,6 +22,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <format>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -128,6 +135,43 @@ void copyCString(std::string_view text,
 namespace {
 std::mutex                                           writesMutex;
 std::vector<std::pair<std::uint32_t, std::uint32_t>> writes;
+std::vector<std::string>                             calls;           // guarded by writesMutex
+std::map<std::uint32_t, unsigned char>               memory;          // guarded by writesMutex
+bool                                                 halted{false};   // guarded by writesMutex
+
+void recordCall(std::string call) {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    calls.push_back(std::move(call));
+}
+
+// Data (00), extended segment (02) and extended linear (04) address records; no checksum check.
+void loadHex(char const* fileName) {
+    std::ifstream in{fileName};
+    std::string   line;
+    std::uint32_t base = 0;
+    auto const    byteAt
+      = [&](std::size_t i) { return std::stoul(line.substr(1 + 2 * i, 2), nullptr, 16); };
+    while(std::getline(in, line)) {
+        while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) { line.pop_back(); }
+        if(line.size() < 11 || line.front() != ':') { continue; }
+        auto const count  = byteAt(0);
+        auto const offset = static_cast<std::uint32_t>((byteAt(1) << 8U) | byteAt(2));
+        auto const type   = byteAt(3);
+        if(line.size() < 11 + 2 * count) { continue; }
+        if(type == 1) { break; }
+        if(type == 2 && count == 2) {
+            base = static_cast<std::uint32_t>(((byteAt(4) << 8U) | byteAt(5)) << 4U);
+        } else if(type == 4 && count == 2) {
+            base = static_cast<std::uint32_t>(((byteAt(4) << 8U) | byteAt(5)) << 16U);
+        } else if(type == 0) {
+            std::lock_guard<std::mutex> const lock{writesMutex};
+            for(std::size_t i = 0; i != count; ++i) {
+                memory[base + offset + static_cast<std::uint32_t>(i)]
+                  = static_cast<unsigned char>(byteAt(4 + i));
+            }
+        }
+    }
+}
 }   // namespace
 
 extern "C" {
@@ -199,7 +243,10 @@ char JLINK_IsConnected() {
 
 int JLINK_Connect() { return 0; }
 
-char JLINK_IsHalted() { return 0; }
+char JLINK_IsHalted() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    return halted ? 1 : 0;
+}
 
 // Each byte reads as the low byte of its address, so a test can check what it got; DHCSR reads
 // as a running core that was not reset (S_RESET_ST, bit 25, clear).
@@ -214,8 +261,11 @@ int JLINK_ReadMem(std::uint32_t address,
         }
         return 0;
     }
+    std::lock_guard<std::mutex> const lock{writesMutex};
     for(std::uint32_t i = 0; i != numBytes; ++i) {
-        out[i] = static_cast<unsigned char>((address + i) & 0xFFU);
+        auto const loaded = memory.find(address + i);
+        out[i] = loaded != memory.end() ? loaded->second
+                                        : static_cast<unsigned char>((address + i) & 0xFFU);
     }
     return 0;
 }
@@ -224,6 +274,15 @@ int JLINK_WriteU32(std::uint32_t address,
                    std::uint32_t data) {
     std::lock_guard<std::mutex> const lock{writesMutex};
     writes.emplace_back(address, data);
+    calls.push_back(std::format("w4 {:#010x} {:#010x}", address, data));
+    return 0;
+}
+
+char JLINK_WriteReg(int           registerIndex,
+                    std::uint32_t data) {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    if(!halted) { return -1; }   // the real DLL cannot write a running core's registers
+    calls.push_back(std::format("wreg {} {:#010x}", registerIndex, data));
     return 0;
 }
 
@@ -232,9 +291,17 @@ std::uint32_t JLINK_ReadReg(int registerIndex) {
     return 0x1000U + static_cast<std::uint32_t>(registerIndex);
 }
 
-void JLINK_Halt() {}
+void JLINK_Halt() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    halted = true;
+    calls.emplace_back("halt");
+}
 
-void JLINK_Go() {}
+void JLINK_Go() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    halted = false;
+    calls.emplace_back("go");
+}
 
 int JLINK_ClrBPEx(unsigned) { return 0; }
 
@@ -247,6 +314,7 @@ int JLINK_ExecCommand(char const*,
 int JLINK_HasError() { return 0; }
 
 void JLINK_Close() {
+    recordCall("close");
     auto&                             f = fake();
     std::lock_guard<std::mutex> const lock{f.mutex};
     f.open       = false;
@@ -261,6 +329,7 @@ char JLINK_SelectIP(char const*,
 }
 
 int JLINK_Reset() {
+    recordCall("reset");
     auto&                             f = fake();
     std::lock_guard<std::mutex> const lock{f.mutex};
     for(auto& channel : f.duplexChannels) {
@@ -274,6 +343,8 @@ int JLINK_SetResetType(std::uint8_t) { return 0; }
 
 int JLINK_DownloadFile(char const* sFileName,
                        std::uint32_t) {
+    recordCall(std::string{"download "} + sFileName);
+    loadHex(sFileName);
     auto& f = fake();
     {
         std::lock_guard<std::mutex> const lock{f.mutex};
@@ -298,6 +369,7 @@ int JLINK_RTTERMINAL_Control(std::uint32_t command,
         }
     case 1:   // stop
         {
+            recordCall("rtt stop");
             f.rttRunning = false;
             return 0;
         }
@@ -385,4 +457,14 @@ fakeJLinkWrites() {
 void fakeJLinkClearWrites() {
     std::lock_guard<std::mutex> const lock{writesMutex};
     writes.clear();
+}
+
+std::vector<std::string> fakeJLinkCalls() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    return calls;
+}
+
+void fakeJLinkClearCalls() {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    calls.clear();
 }
