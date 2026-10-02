@@ -18,6 +18,17 @@
 #include <thread>
 #include <vector>
 
+// Tells clang that a returned pointer refers to this argument, so its lifetime analysis can see a dangling use. Nothing
+// on other compilers.
+#if defined(__has_cpp_attribute)
+    #if __has_cpp_attribute(clang::lifetimebound)
+        #define JLINK_LIFETIMEBOUND [[clang::lifetimebound]]
+    #endif
+#endif
+#ifndef JLINK_LIFETIMEBOUND
+    #define JLINK_LIFETIMEBOUND
+#endif
+
 struct JLink;
 
 static JLink*& getJLinkInstance() {
@@ -326,8 +337,8 @@ private:
     }
 
     // The probe named by serial number or nickname, or nullptr.
-    static EmuConnectInfo const* find(std::vector<EmuConnectInfo> const& probes,
-                                      std::string const&                 probe) {
+    static EmuConnectInfo const* find(std::vector<EmuConnectInfo> const& probes JLINK_LIFETIMEBOUND,
+                                      std::string const&                        probe) {
         bool const numeric = !probe.empty() && std::ranges::all_of(probe, [](char c) {
             return c >= '0' && c <= '9';
         });
