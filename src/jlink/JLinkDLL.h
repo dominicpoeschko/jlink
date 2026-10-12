@@ -128,9 +128,17 @@ char          JLINK_IsHalted();
 int JLINK_ReadMem(std::uint32_t address,
                   std::uint32_t numBytes,
                   void*         data);
+// The same from the target itself, never from the DLL's cache. Returns 0 on success.
+int JLINK_ReadMemHW(std::uint32_t address,
+                    std::uint32_t numBytes,
+                    void*         data);
 // Works while the core runs. Returns 0 on success.
-int           JLINK_WriteU32(std::uint32_t address,
-                             std::uint32_t data);
+int JLINK_WriteU32(std::uint32_t address,
+                   std::uint32_t data);
+// Works while the core runs. Returns the bytes written, negative on error.
+int           JLINK_WriteMem(std::uint32_t address,
+                             std::uint32_t numBytes,
+                             void const*   data);
 std::uint32_t JLINK_ReadReg(int registerIndex);
 void          JLINK_Halt();
 void          JLINK_Go();

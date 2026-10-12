@@ -610,11 +610,14 @@ public:
         if(ret < 0) { throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)}; }
     }
 
-    /// Reads target memory while the core keeps running.
+    /// Reads target memory while the core keeps running - always from the target: JLINK_ReadMem serves a halted
+    /// core's memory from the DLL's cache, but another core (or DMA) keeps writing it (a halted core 0 beside a core 1
+    /// that logs on: fresh offsets, stale bytes). Same speed.
     void readMemory(std::uint32_t        address,
                     std::span<std::byte> out) {
-        int const ret = JLINK_ReadMem(address, static_cast<std::uint32_t>(out.size()), out.data());
-        if(ret != 0) { throw std::runtime_error{"JLINK_ReadMem: " + std::to_string(ret)}; }
+        int const ret
+          = JLINK_ReadMemHW(address, static_cast<std::uint32_t>(out.size()), out.data());
+        if(ret != 0) { throw std::runtime_error{"JLINK_ReadMemHW: " + std::to_string(ret)}; }
     }
 
     /// Disables and clears every NVIC interrupt, as a reset leaves them (flashRamImage).
@@ -629,6 +632,16 @@ public:
         for(std::uint32_t n = 0; n != words; ++n) {
             writeWord(0xE000E180 + 4 * n, 0xFFFF'FFFF);   // NVIC_ICERn
             writeWord(0xE000E280 + 4 * n, 0xFFFF'FFFF);   // NVIC_ICPRn
+        }
+    }
+
+    /// Writes bytes while the core keeps running (an RTT down ring read by the printer itself).
+    void writeMemory(std::uint32_t              address,
+                     std::span<std::byte const> data) {
+        int const ret
+          = JLINK_WriteMem(address, static_cast<std::uint32_t>(data.size()), data.data());
+        if(ret < 0 || static_cast<std::size_t>(ret) != data.size()) {
+            throw std::runtime_error{"JLINK_WriteMem: " + std::to_string(ret)};
         }
     }
 
@@ -655,6 +668,9 @@ public:
                                      + "): " + std::to_string(static_cast<int>(ret))};
         }
     }
+
+    /// The serial number of the probe this session opened.
+    std::uint32_t serialNumber() { return static_cast<std::uint32_t>(JLINK_GetSN()); }
 
     void halt() { JLINK_Halt(); }
 

@@ -270,12 +270,28 @@ int JLINK_ReadMem(std::uint32_t address,
     return 0;
 }
 
+int JLINK_ReadMemHW(std::uint32_t address,
+                    std::uint32_t numBytes,
+                    void*         data) {
+    return JLINK_ReadMem(address, numBytes, data);
+}
+
 int JLINK_WriteU32(std::uint32_t address,
                    std::uint32_t data) {
     std::lock_guard<std::mutex> const lock{writesMutex};
     writes.emplace_back(address, data);
     calls.push_back(std::format("w4 {:#010x} {:#010x}", address, data));
     return 0;
+}
+
+int JLINK_WriteMem(std::uint32_t address,
+                   std::uint32_t numBytes,
+                   void const*   data) {
+    std::lock_guard<std::mutex> const lock{writesMutex};
+    auto const* const                 in = static_cast<unsigned char const*>(data);
+    for(std::uint32_t i = 0; i != numBytes; ++i) { memory[address + i] = in[i]; }
+    calls.push_back(std::format("wmem {:#010x} {}", address, numBytes));
+    return static_cast<int>(numBytes);
 }
 
 char JLINK_WriteReg(int           registerIndex,
