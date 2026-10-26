@@ -15,7 +15,7 @@ target_include_directories(jlink INTERFACE src)
 
 if(JLINK_USE_FAKE_DLL)
     add_library(jlink_fake_dll STATIC src/jlink/JLinkFakeDLL.cpp)
-    target_compile_features(jlink_fake_dll PUBLIC cxx_std_20)
+    target_compile_features(jlink_fake_dll PUBLIC cxx_std_26)
     target_link_libraries(jlink INTERFACE jlink_fake_dll)
 else()
     if(USE_JLINK_OPTIONAL)

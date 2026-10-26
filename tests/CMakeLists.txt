@@ -27,7 +27,7 @@ enable_testing()
 
 add_executable(jlink_tests jlink_tests.cpp)
 target_link_libraries(jlink_tests PRIVATE jlink::jlink)
-target_compile_features(jlink_tests PRIVATE cxx_std_23)
+target_compile_features(jlink_tests PRIVATE cxx_std_26)
 target_add_default_build_options(jlink_tests PRIVATE)
 # the test writes its RAM image's hex file into the working directory
 add_test(
