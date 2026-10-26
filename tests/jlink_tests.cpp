@@ -15,12 +15,14 @@
 #include <string_view>
 #include <vector>
 
-static bool throws(std::string_view line) {
+namespace {
+bool throws(std::string_view line) {
     try {
         JLink::parseCommand(line);
     } catch(std::runtime_error const&) { return true; }
     return false;
 }
+}   // namespace
 
 int main() {
     CHECK((JLink::parseCommand("w4 0x4001A004 0x01000000")
@@ -118,7 +120,7 @@ int main() {
             jlink.flashRamImage(hexFile,
                                 JLink::RamImageStart{0x2000'0000, 0x2008'1000, 0x2000'0199});
         } catch(std::runtime_error const& e) {
-            threw = std::string_view{e.what()}.find("after the download") != std::string_view::npos;
+            threw = std::string_view{e.what()}.contains("after the download");
         }
         CHECK(threw, "words the target does not hold are an error");
         auto const after = fakeJLinkCalls();
