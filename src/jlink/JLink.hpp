@@ -20,12 +20,9 @@
 
 // Tells clang that a returned pointer refers to this argument, so its lifetime analysis can see a dangling use. Nothing
 // on other compilers.
-#if defined(__has_cpp_attribute)
-    #if __has_cpp_attribute(clang::lifetimebound)
-        #define JLINK_LIFETIMEBOUND [[clang::lifetimebound]]
-    #endif
-#endif
-#ifndef JLINK_LIFETIMEBOUND
+#if __has_cpp_attribute(clang::lifetimebound)
+    #define JLINK_LIFETIMEBOUND [[clang::lifetimebound]]
+#else
     #define JLINK_LIFETIMEBOUND
 #endif
 
@@ -137,23 +134,21 @@ private:
             JLINK_Close();
             throw std::runtime_error{"JLINK_IsConnected failed: timeout"};
         }
-        postConnectDisableDialogs();
     }
 
     void execCommand(std::string const& cmd) {
         {
-            std::array<char, 1024> error_buffer{};
+            std::array<char, 1024> errorBuffer{};
 
-            int const ret
-              = JLINK_ExecCommand(cmd.c_str(), error_buffer.data(), error_buffer.size());
+            int const ret = JLINK_ExecCommand(cmd.c_str(), errorBuffer.data(), errorBuffer.size());
             if(ret != 0) {
-                std::string error_msg;
+                std::string errorMsg;
                 if(ret > 0) {
-                    error_msg
-                      = std::string_view{error_buffer.data(), std::next(error_buffer.data(), ret)};
+                    errorMsg
+                      = std::string_view{errorBuffer.data(), std::next(errorBuffer.data(), ret)};
                 }
                 JLINK_Close();
-                throw std::runtime_error{"JLINK_ExecCommand(\"" + cmd + "\") failed: " + error_msg};
+                throw std::runtime_error{"JLINK_ExecCommand(\"" + cmd + "\") failed: " + errorMsg};
             }
         }
     }
@@ -191,8 +186,6 @@ private:
         execCommand("DisableInfoWinFlashDL");
         execCommand("DisableInfoWinFlashBPs");
     }
-
-    void postConnectDisableDialogs() { /*execCommand("SetBatchMode 1");*/ }
 
     void closeRtt() {
         int const ret = JLINK_RTTERMINAL_Control(1, nullptr);   // stop
@@ -396,7 +389,8 @@ public:
             if(rttOpen) { closeRtt(); }
             JLINK_Close();
             getJLinkInstance() = nullptr;
-        } catch(...) {}
+        } catch(...) { /* ignored: a destructor; the DLL is closed as far as it lets */
+        }
     }
 
     // buffers is the total buffer count (up + down)
@@ -487,7 +481,7 @@ public:
             int const ret = JLINK_RTTERMINAL_Control(2, &desc);   // getDesc
             if(ret < 0) { return std::nullopt; }
         } catch(...) { return std::nullopt; }
-        auto const nameEnd = std::find(desc.name.begin(), desc.name.end(), '\0');
+        auto const nameEnd = std::ranges::find(desc.name, '\0');
         return BufferDesc{
           index,
           down,
@@ -509,18 +503,18 @@ public:
     /// controller a single call can fail and the next one succeed; dropping the session at once
     /// forces a reconnect, which the DLL may answer by resetting the target via nRESET.
     bool isHalted() {
-        static constexpr int Tries = 4;
+        static constexpr int tries = 4;
         for(int attempt = 1;; ++attempt) {
             char const ret = JLINK_IsHalted();
             if(ret >= 0) { return ret > 0; }
-            if(attempt >= Tries) {
+            if(attempt >= tries) {
                 throw std::runtime_error{"JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))
-                                         + " (" + std::to_string(Tries) + " tries)"};
+                                         + " (" + std::to_string(tries) + " tries)"};
             }
             if(errorMsgFunction) {
                 errorMsgFunction("JLINK_IsHalted: " + std::to_string(static_cast<int>(ret))
                                  + ", try " + std::to_string(attempt) + " of "
-                                 + std::to_string(Tries) + " -- the session is kept");
+                                 + std::to_string(tries) + " -- the session is kept");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{100});
         }
@@ -537,7 +531,7 @@ public:
 
     /// Parses one J-Link Commander line of the subset the printer runs before a reset:
     /// `w4 <address> <value>`, numbers in hex (0x...) or decimal. The chip package's
-    /// TARGET_JLINK_CONNECT_COMMANDS come in this form (the RP chips park core 1 with them);
+    /// kvasir_chip JLINK_CONNECT_COMMANDS come in this form (the RP chips park core 1 with them);
     /// anything else throws, so a line the printer cannot run is an error at startup and not
     /// a reset that silently skips it.
     static MemoryWrite parseCommand(std::string_view line) {
@@ -571,9 +565,9 @@ public:
                 if(c >= '0' && c <= '9') {
                     digit = static_cast<std::uint64_t>(c - '0');
                 } else if(base == 16 && c >= 'a' && c <= 'f') {
-                    digit = static_cast<std::uint64_t>(c - 'a' + 10);
+                    digit = static_cast<std::uint64_t>(c - 'a') + 10U;
                 } else if(base == 16 && c >= 'A' && c <= 'F') {
-                    digit = static_cast<std::uint64_t>(c - 'A' + 10);
+                    digit = static_cast<std::uint64_t>(c - 'A') + 10U;
                 } else {
                     throw bad();
                 }
@@ -608,6 +602,19 @@ public:
         runPreResetCommands();
         int const ret = JLINK_Reset();
         if(ret < 0) { throw std::runtime_error{"JLINK_Reset: " + std::to_string(ret)}; }
+    }
+
+    /// One pulse on the probe's nRESET pin and nothing else: the target restarts and runs, and the caller connects
+    /// anew (the pin may have reset the debug port too). Not JLINK_Reset with reset type 2: that strategy halts the
+    /// core at its reset vector afterwards (DEMCR.VC_CORERESET), and on a chip whose pin also resets the debug logic
+    /// (RP2350: RUN resets the SW-DP, datasheet 7.3.1 Table 528) the vector catch is gone - the DLL reconnects, tries
+    /// AIRCR.VECTRESET (none on an Armv8-M core) and pulses the pin again, then once more for a connect under reset:
+    /// three resets for one request. The pulse is held `low` long enough for any supervisor-style input.
+    void pulseResetPin(std::chrono::milliseconds low = std::chrono::milliseconds{20}) {
+        runPreResetCommands();
+        JLINK_ClrRESET();
+        std::this_thread::sleep_for(low);
+        JLINK_SetRESET();
     }
 
     /// Reads target memory while the core keeps running - always from the target: JLINK_ReadMem serves a halted
@@ -704,10 +711,10 @@ public:
 
     // VTOR: Armv6-M ARM DDI0419E Table B3-4 (B3.2.2), Armv8-M ARM DDI0553B.y D1.2.272, RP2040
     // data sheet 2.4.8 Table 106.
-    static constexpr std::uint32_t VtorAddress = 0xE000'ED08;
+    static constexpr std::uint32_t vtorAddress = 0xE000'ED08;
     // xPSR with only EPSR.T (bit 24) set: Thumb state, IPSR 0 = Thread mode, the state a reset
     // leaves (DDI0419E B1.4.2, B1.5.5 "Reset behavior").
-    static constexpr std::uint32_t ResetXpsr = 0x0100'0000;
+    static constexpr std::uint32_t resetXpsr = 0x0100'0000;
 
     /// Loads an image that lives in RAM and starts it, like the SDK's J-Link script for a
     /// RAM_ONLY image (cmake/jlink.cmake). A reset after the download would run the boot ROM, so
@@ -745,9 +752,9 @@ public:
         // B3.4), sixteen on Armv7-M/Armv8-M (DDI0553B.y D1.2.183/184); CPUID.ARCHITECTURE 0xC =
         // Armv6-M (DDI0419E B3.2.3).
         clearNvic();
-        writeWord(VtorAddress, start.vectorTable);
+        writeWord(vtorAddress, start.vectorTable);
         writeRegister(CoreRegister::msp, start.initialSp);
-        writeRegister(CoreRegister::xpsr, ResetXpsr);
+        writeRegister(CoreRegister::xpsr, resetXpsr);
         writeRegister(CoreRegister::pc, start.resetVector & ~1U);
         if(logMsgFunction) {
             logMsgFunction(

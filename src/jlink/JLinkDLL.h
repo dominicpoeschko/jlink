@@ -39,8 +39,8 @@ struct EmuConnectInfo {
     std::uint8_t                 connection{};   // EmuHostUsb / EmuHostIp
     std::uint32_t                usbAddr{};
     std::array<std::uint8_t, 16> ipAddr{};
-    int                          time{};      // ms until the UDP discover answer (IP)
-    std::uint64_t                time_us{};   // same in us
+    int                          time{};     // ms until the UDP discover answer (IP)
+    std::uint64_t                timeUs{};   // same in us
     std::uint32_t                hwVersion{};
     std::array<std::uint8_t, 6>  macAddr{};
     std::array<char, 32>         product{};
@@ -71,7 +71,7 @@ static_assert(offsetof(EmuConnectInfo,
                        time)
               == 28);
 static_assert(offsetof(EmuConnectInfo,
-                       time_us)
+                       timeUs)
               == 32);
 static_assert(offsetof(EmuConnectInfo,
                        hwVersion)
@@ -120,7 +120,7 @@ char const*   JLINK_OpenEx(void (*log)(char const*),
                            void (*errorLog)(char const*));
 char          JLINK_IsOpen();
 int           JLINK_TIF_Select(int interface);   // JTAG 0 SWD 1
-void          JLINK_SetSpeed(std::uint32_t Speed);
+void          JLINK_SetSpeed(std::uint32_t speed);
 char          JLINK_IsConnected();
 int           JLINK_Connect();
 char          JLINK_IsHalted();
@@ -152,17 +152,21 @@ char          JLINK_SelectUSB(int port);
 char          JLINK_SelectIP(char const* host,
                              int         port);
 int           JLINK_Reset();
-int           JLINK_SetResetType(std::uint8_t ResetType);   // 0=Normal, 1=Core, 2=ResetPin
-int           JLINK_DownloadFile(char const*   sFileName,
-                                 std::uint32_t Addr);
-int JLINK_RTTERMINAL_Control(std::uint32_t command,   // start 0 stop 1 getDesc 2 getStatus 4
-                             void*);
-int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
-                          char*         buffer,
-                          std::uint32_t bufferSize);
-int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
-                           char const*   buffer,
+int           JLINK_SetResetType(std::uint8_t resetType);   // 0=Normal, 1=Core, 2=ResetPin
+// The probe's nRESET pin itself, nothing else: Clr drives it low, Set releases it (JLINKARM_ClrRESET /
+// JLINKARM_SetRESET of SEGGER's JLinkARMDLL.h).
+void JLINK_ClrRESET();
+void JLINK_SetRESET();
+int  JLINK_DownloadFile(char const*   sFileName,
+                        std::uint32_t addr);
+int  JLINK_RTTERMINAL_Control(std::uint32_t command,   // start 0 stop 1 getDesc 2 getStatus 4
+                              void*);
+int  JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
+                           char*         buffer,
                            std::uint32_t bufferSize);
+int  JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
+                            char const*   buffer,
+                            std::uint32_t bufferSize);
 
 // Only while the core is halted. 0 on success. The index is SEGGER's JLINKARM_CM3_REG_*
 // (JLINKARM_Const.h; the ARM_REG argument of JLinkARMDLL.h is an int-sized enum).

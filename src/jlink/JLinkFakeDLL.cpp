@@ -33,7 +33,13 @@
 
 namespace {
 
-constexpr std::size_t FakeBufferCapacity = 4096;
+constexpr std::size_t fakeBufferCapacity = 4096;
+
+// The fake's settings (above), read once per construction; no host that loads it changes its environment.
+char const* setting(char const* name) {
+    // NOLINTNEXTLINE(concurrency-mt-unsafe) // getenv races only a setenv/putenv, and no host calls one
+    return std::getenv(name);
+}
 
 struct FakeChannel {
     std::string       name;
@@ -59,17 +65,17 @@ struct FakeJLink {
     std::jthread targetThread;
 
     FakeJLink() {
-        if(char const* env = std::getenv("FAKE_JLINK_LOG_BUFFERS")) {
+        if(char const* env = setting("FAKE_JLINK_LOG_BUFFERS")) {
             numLogBuffers = static_cast<std::size_t>(std::strtoul(env, nullptr, 10));
         }
         std::string names{"echo"};
-        if(char const* env = std::getenv("FAKE_JLINK_DUPLEX_CHANNELS")) { names = env; }
+        if(char const* env = setting("FAKE_JLINK_DUPLEX_CHANNELS")) { names = env; }
         for(std::size_t pos{}; pos <= names.size();) {
             auto const comma = std::min(names.find(',', pos), names.size());
             if(comma != pos) { duplexChannels.push_back({names.substr(pos, comma - pos), {}, {}}); }
             pos = comma + 1;
         }
-        noGetDesc = std::getenv("FAKE_JLINK_NO_GETDESC") != nullptr;
+        noGetDesc = setting("FAKE_JLINK_NO_GETDESC") != nullptr;
 
         targetThread = std::jthread{[this](std::stop_token const& stoken) { targetLoop(stoken); }};
     }
@@ -79,10 +85,10 @@ struct FakeJLink {
     void targetLoop(std::stop_token const& stoken) {
         while(!stoken.stop_requested()) {
             {
-                std::lock_guard<std::mutex> const lock{mutex};
+                std::scoped_lock<std::mutex> const lock{mutex};
                 if(rttRunning) {
                     for(auto& channel : duplexChannels) {
-                        auto const space = FakeBufferCapacity - channel.upFifo.size();
+                        auto const space = fakeBufferCapacity - channel.upFifo.size();
                         auto const n     = std::min(space, channel.downFifo.size());
                         if(n != 0) {
                             channel.upFifo.insert(
@@ -104,7 +110,7 @@ struct FakeJLink {
         if(logCallback != nullptr) { logCallback(msg); }
     }
 
-    std::size_t numUpBuffers() const { return numLogBuffers + duplexChannels.size(); }
+    [[nodiscard]] std::size_t numUpBuffers() const { return numLogBuffers + duplexChannels.size(); }
 };
 
 FakeJLink& fake() {
@@ -140,7 +146,7 @@ std::map<std::uint32_t, unsigned char>               memory;          // guarded
 bool                                                 halted{false};   // guarded by writesMutex
 
 void recordCall(std::string call) {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     calls.push_back(std::move(call));
 }
 
@@ -164,7 +170,7 @@ void loadHex(char const* fileName) {
         } else if(type == 4 && count == 2) {
             base = static_cast<std::uint32_t>(((byteAt(4) << 8U) | byteAt(5)) << 16U);
         } else if(type == 0) {
-            std::lock_guard<std::mutex> const lock{writesMutex};
+            std::scoped_lock<std::mutex> const lock{writesMutex};
             for(std::size_t i = 0; i != count; ++i) {
                 memory[base + offset + static_cast<std::uint32_t>(i)]
                   = static_cast<unsigned char>(byteAt(4 + i));
@@ -216,8 +222,8 @@ void JLINK_GetFirmwareString(char* buffer,
 
 char const* JLINK_OpenEx(void (*log)(char const*),
                          void (*errorLog)(char const*)) {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     f.logCallback   = log;
     f.errorCallback = errorLog;
     f.open          = true;
@@ -226,8 +232,8 @@ char const* JLINK_OpenEx(void (*log)(char const*),
 }
 
 char JLINK_IsOpen() {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     return f.open ? 1 : 0;
 }
 
@@ -236,15 +242,15 @@ int JLINK_TIF_Select(int) { return 0; }
 void JLINK_SetSpeed(std::uint32_t) {}
 
 char JLINK_IsConnected() {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     return f.open ? 1 : 0;
 }
 
 int JLINK_Connect() { return 0; }
 
 char JLINK_IsHalted() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     return halted ? 1 : 0;
 }
 
@@ -261,7 +267,7 @@ int JLINK_ReadMem(std::uint32_t address,
         }
         return 0;
     }
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     for(std::uint32_t i = 0; i != numBytes; ++i) {
         auto const loaded = memory.find(address + i);
         out[i] = loaded != memory.end() ? loaded->second
@@ -278,7 +284,7 @@ int JLINK_ReadMemHW(std::uint32_t address,
 
 int JLINK_WriteU32(std::uint32_t address,
                    std::uint32_t data) {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     writes.emplace_back(address, data);
     calls.push_back(std::format("w4 {:#010x} {:#010x}", address, data));
     return 0;
@@ -287,8 +293,8 @@ int JLINK_WriteU32(std::uint32_t address,
 int JLINK_WriteMem(std::uint32_t address,
                    std::uint32_t numBytes,
                    void const*   data) {
-    std::lock_guard<std::mutex> const lock{writesMutex};
-    auto const* const                 in = static_cast<unsigned char const*>(data);
+    std::scoped_lock<std::mutex> const lock{writesMutex};
+    auto const* const                  in = static_cast<unsigned char const*>(data);
     for(std::uint32_t i = 0; i != numBytes; ++i) { memory[address + i] = in[i]; }
     calls.push_back(std::format("wmem {:#010x} {}", address, numBytes));
     return static_cast<int>(numBytes);
@@ -296,7 +302,7 @@ int JLINK_WriteMem(std::uint32_t address,
 
 char JLINK_WriteReg(int           registerIndex,
                     std::uint32_t data) {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     if(!halted) { return -1; }   // the real DLL cannot write a running core's registers
     calls.push_back(std::format("wreg {} {:#010x}", registerIndex, data));
     return 0;
@@ -308,13 +314,13 @@ std::uint32_t JLINK_ReadReg(int registerIndex) {
 }
 
 void JLINK_Halt() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     halted = true;
     calls.emplace_back("halt");
 }
 
 void JLINK_Go() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     halted = false;
     calls.emplace_back("go");
 }
@@ -331,8 +337,8 @@ int JLINK_HasError() { return 0; }
 
 void JLINK_Close() {
     recordCall("close");
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     f.open       = false;
     f.rttRunning = false;
 }
@@ -346,8 +352,8 @@ char JLINK_SelectIP(char const*,
 
 int JLINK_Reset() {
     recordCall("reset");
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     for(auto& channel : f.duplexChannels) {
         channel.upFifo.clear();
         channel.downFifo.clear();
@@ -357,13 +363,17 @@ int JLINK_Reset() {
 
 int JLINK_SetResetType(std::uint8_t) { return 0; }
 
+void JLINK_ClrRESET() { recordCall("reset pin low"); }
+
+void JLINK_SetRESET() { recordCall("reset pin high"); }
+
 int JLINK_DownloadFile(char const* sFileName,
                        std::uint32_t) {
     recordCall(std::string{"download "} + sFileName);
     loadHex(sFileName);
     auto& f = fake();
     {
-        std::lock_guard<std::mutex> const lock{f.mutex};
+        std::scoped_lock<std::mutex> const lock{f.mutex};
         f.log((std::string{"fake jlink dll: flash "} + sFileName).c_str());
     }
     return 0;
@@ -371,8 +381,8 @@ int JLINK_DownloadFile(char const* sFileName,
 
 int JLINK_RTTERMINAL_Control(std::uint32_t command,
                              void*         data) {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     switch(command) {
     case 0:   // start
         {
@@ -395,7 +405,7 @@ int JLINK_RTTERMINAL_Control(std::uint32_t command,
             auto& desc  = *static_cast<RTTBufferDesc*>(data);
             auto  index = static_cast<std::size_t>(desc.bufferIndex);
             desc.name.fill('\0');
-            desc.sizeOfBuffer = FakeBufferCapacity;
+            desc.sizeOfBuffer = fakeBufferCapacity;
             desc.flags        = 0;
 
             std::string name;
@@ -431,8 +441,8 @@ int JLINK_RTTERMINAL_Control(std::uint32_t command,
 int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
                           char*         buffer,
                           std::uint32_t bufferSize) {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     if(!f.rttRunning || bufferIndex >= f.numUpBuffers()) { return -1; }
     if(bufferIndex < f.numLogBuffers) { return 0; }   // log buffers stay silent
 
@@ -449,13 +459,13 @@ int JLINK_RTTERMINAL_Read(std::uint32_t bufferIndex,
 int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
                            char const*   buffer,
                            std::uint32_t bufferSize) {
-    auto&                             f = fake();
-    std::lock_guard<std::mutex> const lock{f.mutex};
+    auto&                              f = fake();
+    std::scoped_lock<std::mutex> const lock{f.mutex};
     if(!f.rttRunning || bufferIndex >= f.duplexChannels.size()) { return -1; }
 
     // partial writes when the fake down buffer is full, like a real full target buffer
     auto&      fifo = f.duplexChannels[bufferIndex].downFifo;
-    auto const n    = std::min<std::size_t>(FakeBufferCapacity - fifo.size(), bufferSize);
+    auto const n    = std::min<std::size_t>(fakeBufferCapacity - fifo.size(), bufferSize);
     if(n != 0) {
         fifo.insert(fifo.end(), buffer, std::next(buffer, static_cast<std::ptrdiff_t>(n)));
     }
@@ -466,21 +476,21 @@ int JLINK_RTTERMINAL_Write(std::uint32_t bufferIndex,
 std::vector<std::pair<std::uint32_t,
                       std::uint32_t>>
 fakeJLinkWrites() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     return writes;
 }
 
 void fakeJLinkClearWrites() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     writes.clear();
 }
 
 std::vector<std::string> fakeJLinkCalls() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     return calls;
 }
 
 void fakeJLinkClearCalls() {
-    std::lock_guard<std::mutex> const lock{writesMutex};
+    std::scoped_lock<std::mutex> const lock{writesMutex};
     calls.clear();
 }

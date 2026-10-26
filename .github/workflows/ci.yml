@@ -1,0 +1,53 @@
+name: CI
+
+on:
+    workflow_dispatch:
+    push:
+        branches:
+            - master
+    pull_request:
+        branches:
+            - master
+
+jobs:
+    # JLink.hpp against the in-process fake DLL (tests/): command parsing, pre-reset writes, the RAM image start, the
+    # end of a session. No probe and no SEGGER library needed.
+    build-and-test:
+        runs-on: ubuntu-latest
+        container:
+            image: archlinux:latest
+        strategy:
+            fail-fast: false
+            matrix:
+                compiler:
+                    - {cc: gcc, cxx: g++}
+                    - {cc: gcc, cxx: g++, build_type: Debug, stdlib_debug: true, sanitizer: address}
+                    - {cc: clang, cxx: clang++}
+                    - {cc: clang, cxx: clang++, sanitizer: address}
+
+        steps:
+            - name: Set up C++ environment
+              run: |
+                pacman -Syu --noconfirm --disable-download-timeout
+                pacman -S --noconfirm --disable-download-timeout git cmake ninja base-devel python ${{ matrix.compiler.cc == 'clang' && 'clang compiler-rt' || '' }}
+
+            - name: Checkout repository
+              uses: actions/checkout@v5
+
+            - name: Configure CMake
+              run: >
+                cmake -S tests -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+                -DUSE_FORCE_FETCH=ON
+                -DUSE_WARNINGS_AS_ERRORS=ON
+                ${{ matrix.compiler.build_type && format('-DCMAKE_BUILD_TYPE={0}', matrix.compiler.build_type) || '' }}
+                ${{ matrix.compiler.sanitizer && format('-DUSE_SANITIZER={0}', matrix.compiler.sanitizer) || '' }}
+                ${{ matrix.compiler.stdlib_debug && '-DUSE_STDLIB_DEBUG=true' || '' }}
+              env:
+                CC: ${{ matrix.compiler.cc }}
+                CXX: ${{ matrix.compiler.cxx }}
+
+            - name: Build project
+              run: cmake --build build -j"$(nproc)"
+
+            - name: Run tests
+              run: cd build && ctest --output-on-failure
