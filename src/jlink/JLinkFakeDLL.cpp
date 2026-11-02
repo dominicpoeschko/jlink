@@ -188,11 +188,11 @@ int JLINK_EMU_GetNumDevices() { return 1; }
 int JLINK_EMU_GetList(int             hostInterfaces,
                       EmuConnectInfo* infos,
                       int             maxInfos) {
-    if((hostInterfaces & EmuHostUsb) == 0) { return 0; }
+    if((hostInterfaces & emuHostUsb) == 0) { return 0; }
     if(maxInfos < 1 || infos == nullptr) { return 1; }
     infos[0]              = EmuConnectInfo{};
     infos[0].serialNumber = fakeSerial;
-    infos[0].connection   = EmuHostUsb;
+    infos[0].connection   = emuHostUsb;
     infos[0].hwVersion    = static_cast<std::uint32_t>(fakeHwVersion);
     copyCString(fakeProduct, infos[0].product.data(), infos[0].product.size());
     copyCString(fakeNick, infos[0].nickName.data(), infos[0].nickName.size());

@@ -36,7 +36,7 @@ struct RTTBufferDesc {
 // build instead of silently misreading the nickname.
 struct EmuConnectInfo {
     std::uint32_t                serialNumber{};
-    std::uint8_t                 connection{};   // EmuHostUsb / EmuHostIp
+    std::uint8_t                 connection{};   // emuHostUsb / emuHostIp
     std::uint32_t                usbAddr{};
     std::array<std::uint8_t, 16> ipAddr{};
     int                          time{};     // ms until the UDP discover answer (IP)
@@ -96,11 +96,11 @@ static_assert(offsetof(EmuConnectInfo,
               == 230);
 
 // Host interface bits for JLINK_EMU_GetList and EmuConnectInfo::connection.
-inline constexpr int EmuHostUsb = 1;
-inline constexpr int EmuHostIp  = 2;
+inline constexpr int emuHostUsb = 1;
+inline constexpr int emuHostIp  = 2;
 
 int JLINK_EMU_GetNumDevices();
-// hostInterfaces: EmuHostUsb, EmuHostIp or both. Returns the number of probes found (may
+// hostInterfaces: emuHostUsb, emuHostIp or both. Returns the number of probes found (may
 // exceed maxInfos; pass nullptr, 0 to just count), negative on error.
 int JLINK_EMU_GetList(int             hostInterfaces,
                       EmuConnectInfo* infos,

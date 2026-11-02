@@ -225,7 +225,7 @@ public:
         std::string   probe{};
     };
 
-    // The probes the DLL sees on the given host interfaces (EmuHostUsb, EmuHostIp or
+    // The probes the DLL sees on the given host interfaces (emuHostUsb, emuHostIp or
     // both), for the selection error messages and for tools that want to list them.
     // Listing IP probes is a UDP discovery and takes a moment.
     static std::vector<EmuConnectInfo> probes(int hostInterfaces) {
@@ -241,7 +241,7 @@ public:
         return infos;
     }
 
-    static std::vector<EmuConnectInfo> usbProbes() { return probes(EmuHostUsb); }
+    static std::vector<EmuConnectInfo> usbProbes() { return probes(emuHostUsb); }
 
     template<std::size_t N>
     static std::string_view cstr(std::array<char,
@@ -289,11 +289,11 @@ public:
     // takes a moment.
     static std::vector<Probe> listProbes() {
         std::vector<Probe> out;
-        for(auto const& p : probes(EmuHostUsb | EmuHostIp)) {
+        for(auto const& p : probes(emuHostUsb | emuHostIp)) {
             out.push_back(Probe{p.serialNumber,
                                 std::string{productOf(p)},
                                 std::string{nickNameOf(p)},
-                                (p.connection & EmuHostUsb) != 0});
+                                (p.connection & emuHostUsb) != 0});
         }
         return out;
     }
@@ -373,7 +373,7 @@ private:
             return;
         }
 
-        auto const ip = probes(EmuHostIp);
+        auto const ip = probes(emuHostIp);
         if(auto const* p = find(ip, probe); p != nullptr) {
             JLINK_EMU_SelectIPBySN(p->serialNumber);   // reports nothing, the open fails
             return;
