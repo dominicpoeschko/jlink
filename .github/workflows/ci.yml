@@ -11,7 +11,9 @@ on:
 
 jobs:
     # JLink.hpp against the in-process fake DLL (tests/): command parsing, pre-reset writes, the RAM image start, the
-    # end of a session. No probe and no SEGGER library needed.
+    # end of a session. No probe and no SEGGER library needed. ship: cmake_helpers' Release as a host tool ships (NDEBUG,
+    # LTO, a gcc LTO link failing on the optimizer's late warnings). Every other entry is Release with its asserts and
+    # without LTO: faster, and gcc's warnings come at compile time.
     build-and-test:
         runs-on: ubuntu-latest
         container:
@@ -20,9 +22,9 @@ jobs:
             fail-fast: false
             matrix:
                 compiler:
-                    - {cc: gcc, cxx: g++}
-                    - {cc: gcc, cxx: g++, build_type: Debug, stdlib_debug: true, sanitizer: address}
-                    - {cc: clang, cxx: clang++}
+                    - {cc: gcc, cxx: g++, ship: true}
+                    - {cc: gcc, cxx: g++, stdlib_debug: true, sanitizer: address}
+                    - {cc: clang, cxx: clang++, ship: true}
                     - {cc: clang, cxx: clang++, sanitizer: address}
 
         steps:
@@ -32,14 +34,16 @@ jobs:
                 pacman -S --noconfirm --disable-download-timeout git cmake ninja base-devel python ${{ matrix.compiler.cc == 'clang' && 'clang compiler-rt' || '' }}
 
             - name: Checkout repository
-              uses: actions/checkout@v5
+              uses: actions/checkout@v7
 
             - name: Configure CMake
               run: >
                 cmake -S tests -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
                 -DUSE_FORCE_FETCH=ON
                 -DUSE_WARNINGS_AS_ERRORS=ON
-                ${{ matrix.compiler.build_type && format('-DCMAKE_BUILD_TYPE={0}', matrix.compiler.build_type) || '' }}
+                -DCMAKE_BUILD_TYPE=Release
+                -DUSE_NATIVE_FLAG=OFF
+                ${{ !matrix.compiler.ship && '-DUSE_NDEBUG=OFF -DUSE_LTO=OFF -DCMAKE_CXX_FLAGS_RELEASE=-O3' || '' }}
                 ${{ matrix.compiler.sanitizer && format('-DUSE_SANITIZER={0}', matrix.compiler.sanitizer) || '' }}
                 ${{ matrix.compiler.stdlib_debug && '-DUSE_STDLIB_DEBUG=true' || '' }}
               env:
@@ -50,7 +54,7 @@ jobs:
               run: cmake --build build -j"$(nproc)"
 
             - name: Run tests
-              run: cd build && ctest --output-on-failure
+              run: cd build && ctest --output-on-failure -j"$(nproc)"
 
             # clang-tidy (Kvasir_SDK master's tools/tidy.py and .clang-tidy, .github/actions/tidy) over this tree:
             # this repository's findings fail, the libraries' are counted as foreign
