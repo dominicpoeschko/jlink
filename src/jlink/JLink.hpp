@@ -72,7 +72,8 @@ private:
     }
 
     void connect(std::string const& device,
-                 std::uint32_t      speed) {
+                 std::uint32_t      speed,
+                 std::string const& scriptFile) {
         if(JLINK_IsOpen() != 0) {
             throw std::runtime_error{std::string{"JLINK_IsOpen: Is allready opened"}};
         }
@@ -101,6 +102,8 @@ private:
         }
 
         JLINK_SetSpeed(speed);
+        // Before the device: the script's ConfigTargetSettings()/InitTarget() take part in the connect.
+        if(!scriptFile.empty()) { execCommand("ScriptFile = " + scriptFile); }
         execCommand("device = " + device);
         {
             char const ret = JLINK_IsConnected();
@@ -201,6 +204,7 @@ private:
              typename SelectF>
     void init(std::string const& device,
               std::uint32_t      speed,
+              std::string const& scriptFile,
               LogF&&             logFunction,
               ErrorF&&           errorFunction,
               SelectF&&          selectFunction) {
@@ -209,7 +213,7 @@ private:
           = std::function<void(std::string_view)>{std::forward<ErrorF>(errorFunction)};
         getJLinkInstance() = this;
         std::invoke(std::forward<SelectF>(selectFunction));
-        connect(device, speed);
+        connect(device, speed, scriptFile);
         checkError();
     }
 
@@ -223,6 +227,9 @@ public:
         std::string   host{};
         std::uint16_t port{19020};
         std::string   probe{};
+        // A J-Link script (JLinkExe's -JLinkScriptFile), run by the DLL at every connect: e.g. one whose InitTarget()
+        // opens an RP2350 locked by a debug key. Empty: none.
+        std::string scriptFile{};
     };
 
     // The probes the DLL sees on the given host interfaces (emuHostUsb, emuHostIp or
@@ -307,6 +314,7 @@ public:
           ErrorF&&           errorFunction) {
         init(device,
              speed,
+             connection.scriptFile,
              std::forward<LogF>(logFunction),
              std::forward<ErrorF>(errorFunction),
              [&]() {
